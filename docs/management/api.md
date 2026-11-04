@@ -3372,7 +3372,7 @@ Query parameters:
 | `include_logs` | boolean | `false` | Return up to 20 redacted log lines when a local request log is found. |
 | `include_related` | boolean | `false` | Compatibility parameter. The event object always includes `related`. |
 
-The response contains `event`, `payload_summary`, and `log_excerpt`. `event` has the same shape as list items. `payload_summary.body_preview` is always `null` to avoid exposing request bodies. Log excerpts are local-only; remote logs are downloaded through `related.request_log.download_url` instead.
+The response contains `event`, `payload_summary`, and `log_excerpt`. `event` has the same shape as list items. `payload_summary.body_preview` is always `null` to avoid exposing request bodies. Log excerpts are local-only; remote logs are downloaded through `related.request_log.download_url` instead. `log_excerpt` reads at most the first 64 KiB of the log file, returns at most 20 non-empty redacted lines, and truncates each line to 500 characters with a `… [truncated N chars]` suffix.
 
 ### GET `/request-events/export`
 

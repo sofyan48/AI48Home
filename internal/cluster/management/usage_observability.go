@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/buildinfo"
@@ -22,6 +24,12 @@ import (
 const (
 	usageExportDefaultLimit          = 10000
 	usageSummaryDefaultWindowSeconds = 24 * 60 * 60
+
+	// Request log lines often contain full JSON bodies on a single line, so the
+	// excerpt bounds both the bytes read from disk and the length of each line.
+	usageLogExcerptMaxLines     = 20
+	usageLogExcerptMaxReadBytes = 64 * 1024
+	usageLogExcerptMaxLineRunes = 500
 )
 
 func (h *Handler) GetCapabilities(c *gin.Context) {
@@ -1538,23 +1546,40 @@ func (h *Handler) usageRequestLogExcerpt(record *cluster.UsageObservabilityRecor
 	if errFind != nil {
 		return []string{}
 	}
-	content, errRead := os.ReadFile(path)
+	file, errOpen := os.Open(path)
+	if errOpen != nil {
+		return []string{}
+	}
+	defer func() {
+		if errClose := file.Close(); errClose != nil {
+			logrus.WithError(errClose).Warn("failed to close request log file")
+		}
+	}()
+	content, errRead := io.ReadAll(io.LimitReader(file, usageLogExcerptMaxReadBytes))
 	if errRead != nil {
 		return []string{}
 	}
 	rawLines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
-	lines := make([]string, 0, 20)
+	lines := make([]string, 0, usageLogExcerptMaxLines)
 	for _, rawLine := range rawLines {
-		if len(lines) >= 20 {
+		if len(lines) >= usageLogExcerptMaxLines {
 			break
 		}
 		line := strings.TrimRight(rawLine, "\r")
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		lines = append(lines, redactUsageRequestLogLine(line))
+		lines = append(lines, truncateUsageRequestLogLine(redactUsageRequestLogLine(line)))
 	}
 	return lines
+}
+
+func truncateUsageRequestLogLine(line string) string {
+	if utf8.RuneCountInString(line) <= usageLogExcerptMaxLineRunes {
+		return line
+	}
+	runes := []rune(line)
+	return fmt.Sprintf("%s… [truncated %d chars]", string(runes[:usageLogExcerptMaxLineRunes]), len(runes)-usageLogExcerptMaxLineRunes)
 }
 
 func redactUsageRequestLogLine(line string) string {
