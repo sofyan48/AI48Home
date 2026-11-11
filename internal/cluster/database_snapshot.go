@@ -402,7 +402,7 @@ func OpenDatabaseSnapshot(ctx context.Context, path string) (*ValidatedDatabaseS
 	if manifest.FormatVersion > currentDatabaseVersion {
 		return nil, fmt.Errorf("database snapshot format version %d is newer than supported version %d", manifest.FormatVersion, currentDatabaseVersion)
 	}
-	models, okModels := databaseSnapshotModels(manifest.FormatVersion)
+	models, okModels := databaseSnapshotManifestModels(manifest)
 	if !okModels {
 		return nil, fmt.Errorf("unsupported database snapshot format version %d", manifest.FormatVersion)
 	}
@@ -427,6 +427,22 @@ func OpenDatabaseSnapshot(ctx context.Context, path string) (*ValidatedDatabaseS
 		models:           models,
 		validatedTargets: make(map[DatabaseBackend]bool, 2),
 	}, nil
+}
+
+// Versions 7..13 were independently assigned by the local and upstream histories.
+// Local archives always include the redemption table, even when it has no rows.
+// Select a frozen registry before validating the full entry set and row shapes;
+// never relax unknown-field or extra-table validation to accommodate a collision.
+func databaseSnapshotManifestModels(manifest DatabaseSnapshotManifest) ([]databaseModel, bool) {
+	if manifest.FormatVersion >= 7 && manifest.FormatVersion <= 13 {
+		for _, table := range manifest.Tables {
+			if table.Name == "codex_reset_redemptions" {
+				return databaseSnapshotModels(manifest.FormatVersion)
+			}
+		}
+		return databaseSnapshotV6Models, true
+	}
+	return databaseSnapshotModels(manifest.FormatVersion)
 }
 
 func validateDatabaseSnapshotEntries(reader *zip.Reader) (map[string]*zip.File, error) {
@@ -1287,6 +1303,28 @@ func databaseSnapshotBatchRows(ctx context.Context, modelSchema *schema.Schema, 
 			}
 			value, _ := field.ValueOf(ctx, batch.Index(index))
 			row[column] = value
+		}
+		if modelSchema.Table == "billing_charge" {
+			if _, hasMultiplier := row["billing_multiplier"]; !hasMultiplier {
+				row["billing_multiplier"] = 1.0
+			}
+			if _, hasBaseAmount := row["base_amount"]; !hasBaseAmount {
+				if amount, okAmount := row["amount"]; okAmount {
+					row["base_amount"] = amount
+				} else {
+					row["base_amount"] = 0.0
+				}
+			}
+			if _, hasAuthIndex := row["auth_index"]; !hasAuthIndex {
+				row["auth_index"] = ""
+			}
+			if _, hasCostDiag := row["cost_diagnostic"]; !hasCostDiag {
+				row["cost_diagnostic"] = ""
+			}
+		} else if modelSchema.Table == "billing_model_price" {
+			if _, hasPricingExpr := row["pricing_expr"]; !hasPricingExpr {
+				row["pricing_expr"] = ""
+			}
 		}
 		rows[index] = row
 	}

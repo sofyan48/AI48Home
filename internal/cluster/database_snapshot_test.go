@@ -63,7 +63,7 @@ func TestUserApprovalMigrationAndSnapshotCompatibility(t *testing.T) {
 			}
 			userType := databaseSnapshotModelType(t, models, "user").Elem()
 			_, hasApproval := userType.FieldByName("ApprovalPending")
-			if hasApproval != (version >= 8) {
+			if hasApproval != (version >= 8 && version <= 13 || version == currentDatabaseVersion) {
 				t.Fatal("legacy user snapshot shape changed")
 			}
 			path := filepath.Join(t.TempDir(), "snapshot.zip")
@@ -87,7 +87,7 @@ func TestUserApprovalMigrationAndSnapshotCompatibility(t *testing.T) {
 			if errLoad := target.First(&restored, oldUser.ID).Error; errLoad != nil {
 				t.Fatal(errLoad)
 			}
-			if restored.ApprovalPending != (version >= 8) || restored.Username != "legacy" || restored.Password != "hash" {
+			if restored.ApprovalPending != (version >= 8 && version <= 13 || version == currentDatabaseVersion) || restored.Username != "legacy" || restored.Password != "hash" {
 				t.Fatalf("snapshot approval compatibility failed: %+v", restored)
 			}
 		})
@@ -596,6 +596,10 @@ func exportDatabaseSnapshotVersion(ctx context.Context, db *gorm.DB, path string
 	if !okModels {
 		return DatabaseSnapshotManifest{}, fmt.Errorf("unsupported test snapshot version %d", formatVersion)
 	}
+	return exportDatabaseSnapshotModels(ctx, db, path, formatVersion, models)
+}
+
+func exportDatabaseSnapshotModels(ctx context.Context, db *gorm.DB, path string, formatVersion int, models []databaseModel) (DatabaseSnapshotManifest, error) {
 	file, errCreate := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errCreate != nil {
 		return DatabaseSnapshotManifest{}, errCreate
