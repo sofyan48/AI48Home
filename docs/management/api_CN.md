@@ -3453,7 +3453,7 @@ Query 参数：
 | `include_logs` | boolean | `false` | 找到本地 request log 时返回最多 20 行脱敏日志片段。 |
 | `include_related` | boolean | `false` | 兼容参数；事件对象始终包含 `related`。 |
 
-响应包含 `event`、`payload_summary` 和 `log_excerpt`。`event` 与列表项同形；`payload_summary.body_preview` 当前固定为 `null`，避免暴露 request body。日志片段只读取本地文件；远端日志应通过 `related.request_log.download_url` 下载。
+响应包含 `event`、`payload_summary` 和 `log_excerpt`。`event` 与列表项同形；`payload_summary.body_preview` 当前固定为 `null`，避免暴露 request body。日志片段只读取本地文件；远端日志应通过 `related.request_log.download_url` 下载。`log_excerpt` 最多读取日志文件前 64 KiB，最多返回 20 行非空的脱敏内容，每行超过 500 字符时会被截断并追加 `… [truncated N chars]` 后缀。
 
 ### GET `/request-events/export`
 
