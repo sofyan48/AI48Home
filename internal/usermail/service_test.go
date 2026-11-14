@@ -55,7 +55,7 @@ func TestResolveConfigValidation(t *testing.T) {
 		t.Fatal("ResolveConfig(implicit TLS port) succeeded")
 	}
 	invalid = userMailTestConfig()
-	invalid.UserEmail.FromName = "CLIProxyAPIHome\r\nBcc: victim@example.com"
+	invalid.UserEmail.FromName = "AI48Home\r\nBcc: victim@example.com"
 	if _, errInvalid := ResolveConfig(invalid); errInvalid == nil {
 		t.Fatal("ResolveConfig(injected from name) succeeded")
 	}
@@ -319,7 +319,7 @@ func userMailTestConfig() *appconfig.Config {
 			Enabled:              true,
 			PublicUserURL:        "http://127.0.0.1/user.html",
 			FromAddress:          "no-reply@example.com",
-			FromName:             "CLIProxyAPIHome",
+			FromName:             "AI48Home",
 			VerificationTokenTTL: "24h",
 			ResetTokenTTL:        "30m",
 			Sender: appconfig.UserEmailSenderConfig{

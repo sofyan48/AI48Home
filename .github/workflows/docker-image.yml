@@ -1,7 +1,7 @@
 name: docker-image
 
 # Publishes multi-arch images to GitHub Container Registry with the AI48Hub panel embedded.
-#   v* tags            -> ghcr.io/<owner>/cliproxyapihome:<tag> and :latest
+#   v* tags            -> ghcr.io/<owner>/ai48home:<tag> and :latest
 #   panel-updated event -> :edge (sent by sofyan48/AI48HomeUI after a push to main)
 #   manual run         -> :edge, or the tag given in the "tag" input
 on:
@@ -133,7 +133,7 @@ jobs:
             BUILD_DATE=${{ env.BUILD_DATE }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.description=CLIProxyAPIHome with the embedded AI48Hub panel
+            org.opencontainers.image.description=AI48Home with the embedded AI48Hub panel
             org.opencontainers.image.licenses=MIT
           tags: ${{ needs.meta.outputs.image }}:${{ needs.meta.outputs.version }}-${{ matrix.arch }}
 

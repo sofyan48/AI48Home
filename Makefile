@@ -1,10 +1,10 @@
 PANEL_REPOSITORY ?= sofyan48/AI48HomeUI
 PANEL_SOURCE_DIR ?=
-PANEL_WORKDIR ?= $(CURDIR)/.tmp/home-management-center
+PANEL_WORKDIR ?= $(CURDIR)/.tmp/ai48home-ui
 EMBED_STATIC_DIR := internal/managementasset/static
-LOCAL_BINARY ?= CLIProxyAPIHome
-DOCKER_IMAGE ?= cliproxyapi-home:embedded-local
-GHCR_IMAGE ?= ghcr.io/sofyan48/cliproxyapihome
+LOCAL_BINARY ?= AI48Home
+DOCKER_IMAGE ?= ai48home:embedded-local
+GHCR_IMAGE ?= ghcr.io/sofyan48/ai48home
 
 .PHONY: embed-local panel-assets-local docker-embed-local run-embedded-local run-downloaded-panel-local clean-embedded-local
 

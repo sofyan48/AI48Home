@@ -37,7 +37,7 @@ type ExcludedConcurrencyCandidate struct {
 
 // Options carries optional request hints used during dispatch selection.
 //
-// This is a deliberately small subset of CPA's execution options: CLIProxyAPIHome only needs
+// This is a deliberately small subset of CPA's execution options: AI48Home only needs
 // headers / query / raw request bytes for selector decisions, and a generic metadata bag.
 type Options struct {
 	Headers         http.Header

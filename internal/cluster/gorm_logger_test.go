@@ -58,7 +58,7 @@ func TestHomeGORMLoggerUsesApplicationFormat(t *testing.T) {
 			}, test.err)
 
 			logs := output.Bytes()
-			if !bytes.HasPrefix(logs, []byte(homelogging.FormatLogSourcePrefix("CLIProxyAPIHome"))) {
+			if !bytes.HasPrefix(logs, []byte(homelogging.FormatLogSourcePrefix("AI48Home"))) {
 				t.Fatalf("GORM log = %q, want application source prefix", logs)
 			}
 			if !bytes.Contains(logs, []byte(test.wantLevel)) {

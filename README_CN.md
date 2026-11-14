@@ -1,39 +1,41 @@
-# Home
+# AI48Home
 
 [English](README.md) | 中文
 
-Home 是一个为 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 设计的全面凭证**管理、调度和分发**服务。
+> AI48Home 基于 [router-for-me/CLIProxyAPIHome](https://github.com/router-for-me/CLIProxyAPIHome) 及其面板 [Home Management Center](https://github.com/router-for-me/Home-Management-Center) 开发。两者均为 MIT 许可，原版权声明保留在 [LICENSE](LICENSE) 中。
+
+AI48Home 是一个为 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 设计的全面凭证**管理、调度和分发**服务。
 
 它作为在大规模 CLIProxyAPI 集群部署中管理和调度 API 凭证的中心枢纽。CLIProxyAPI 节点与 Home 通信以获取必要的 API 凭证并上报使用统计数据。
 
-## Home 与 Home Management Center（HMC）的关系
+## AI48Home 与 AI48HomeUI 的关系
 
-Home 提供后端服务，[Home Management Center（HMC）](https://github.com/router-for-me/Home-Management-Center) 为 Home 提供可视化 Web 界面。**两个开源项目独立维护，HMC 页面内嵌于 Home 的正式发行版中，统一部署和更新。**
+AI48Home 提供后端服务，[AI48HomeUI](https://github.com/sofyan48/AI48HomeUI)（AI48Hub 面板）提供 Web 界面。**两个项目独立维护，AI48HomeUI 内嵌于 AI48Home 的发行版和镜像中，统一部署和更新。**
 
 ### 部署正式发行版
 
-Home 官方二进制和 Docker 镜像已包含 Web 界面，无需单独部署 HMC。启动 Home 后，访问其地址，例如 `http://localhost:8327`，即可打开页面；管理员入口为 `/management.html`，用户入口为 `/user.html`。
+AI48Home 二进制和 Docker 镜像（`ghcr.io/sofyan48/ai48home`）已包含 Web 界面，无需单独部署 AI48HomeUI。启动 Home 后，访问其地址，例如 `http://localhost:8327`，即可打开页面；管理员入口为 `/management.html`，用户入口为 `/user.html`。
 
 管理员登录需要管理密钥，配置方法见[认证说明](docs/management/api_CN.md)。数据库配置与配置导入方式见下文[集群模式](#集群模式)。更新 Web 界面时，升级 Home 二进制或 Docker 镜像即可。
 
 ### 本地同时开发两个项目
 
-开发前端时，将两个仓库克隆到同一父目录下，分别在两个终端中运行 Home 和 HMC。环境要求见 Home 的 [go.mod](go.mod) 和 [HMC 开发说明](https://github.com/router-for-me/Home-Management-Center#readme)。
+开发前端时，将两个仓库克隆到同一父目录下，分别在两个终端中运行 AI48Home 和 AI48HomeUI。环境要求见 [go.mod](go.mod) 和 [AI48HomeUI 开发说明](https://github.com/sofyan48/AI48HomeUI#readme)。
 
 首次在本地搭建且没有 `cluster.yaml` 时，将 Home 的 `config.example.yaml` 复制为 `config.yaml`，填写非空的 `management.secret-key`。先将配置导入本地 SQLite 数据库，再在一个终端中启动 Home：
 
 ```bash
-cd CLIProxyAPIHome
+cd AI48Home
 go run ./cmd/home -config config.yaml -import
 go run ./cmd/home -addr 127.0.0.1:8327
 ```
 
 已有配置好的 Home 后端时，可以直接使用。
 
-在另一个终端中启动 HMC：
+在另一个终端中启动 AI48HomeUI：
 
 ```bash
-cd Home-Management-Center
+cd AI48HomeUI
 bun install --frozen-lockfile
 bun run dev
 ```
@@ -42,18 +44,18 @@ bun run dev
 
 ### 前端内嵌构建与发布流程
 
-从源码构建包含 Web 界面的 Home 时，需要先构建 HMC，将完整产物复制到 Home 后再编译。从两个仓库的共同父目录开始执行：
+从源码构建包含 Web 界面的 Home 时，需要先构建 AI48HomeUI，将完整产物复制到 Home 后再编译。从两个仓库的共同父目录开始执行：
 
 ```bash
-cd Home-Management-Center
+cd AI48HomeUI
 bun install --frozen-lockfile
 bun run build:embedded
-cp -R dist/. ../CLIProxyAPIHome/internal/managementasset/static/
-cd ../CLIProxyAPIHome
-go build -o CLIProxyAPIHome ./cmd/home
+cp -R dist/. ../AI48Home/internal/managementasset/static/
+cd ../AI48Home
+go build -o AI48Home ./cmd/home
 ```
 
-Home 源码仓库不包含生成后的前端产物，`go build` 和 `docker build` 也不会自动构建 HMC。因此，无论构建二进制还是 Docker 镜像，都需要先准备好完整的前端产物。
+Home 源码仓库不包含生成后的前端产物，`go build` 和 `docker build` 也不会自动构建 AI48HomeUI。因此，无论构建二进制还是 Docker 镜像，都需要先准备好完整的前端产物。
 
 正式发布会自动完成上述过程：推送版本标签后，发布流程先构建前端，再打包 Home，生成并发布包含 Web 界面的二进制或 Docker 镜像。具体见[二进制发布工作流](.github/workflows/release.yaml)和 [Docker 工作流](.github/workflows/docker-image.yml)。
 
@@ -85,7 +87,7 @@ PostgreSQL 连接池可在 `cluster.yaml` 中配置：`pgsql.max-open-conns` 默
 `config.yaml` 和 `auth-dir` 不再是运行时存储，只作为导入/导出的交换格式。迁移已有本地配置时，先运行：
 
 ```bash
-./CLIProxyAPIHome -import
+./AI48Home -import
 ```
 
 导入默认读取当前目录的 `config.yaml`，再根据该配置里的 `auth-dir` 查找凭证。可以通过 `-config <path>` 指定配置文件，通过 `-auth-dir <path>` 覆盖凭证目录，通过 `-sqlite-path <path>` 导入到非默认 SQLite 数据库。导入是幂等的，同一批文件重复导入不会产生重复记录。
@@ -93,7 +95,7 @@ PostgreSQL 连接池可在 `cluster.yaml` 中配置：`pgsql.max-open-conns` 默
 需要将配置和凭证导出为本地文件时，运行：
 
 ```bash
-./CLIProxyAPIHome -export
+./AI48Home -export
 ```
 
 导出默认会写出当前目录的 `config.yaml`，并把凭证写到 `~/.cli-proxy-api/`。可以通过 `-export-dir <path>` 写出 `<path>/config.yaml`，并把凭证写到 `<path>/auths/`。如果目标 `config.yaml` 已存在，或者目标凭证目录已存在且非空，导出会拒绝覆盖。
@@ -104,15 +106,15 @@ PostgreSQL 连接池可在 `cluster.yaml` 中配置：`pgsql.max-open-conns` 默
 
 RESP 密码认证已经移除。Home RESP 只接受通过 mTLS 认证的客户端；CPA 应使用 `-home-jwt` 或配置好的 TLS 材料连接。`allow-host` 只是 IP 允许列表，不是密码机制。
 
-Docker Compose 使用 `docker-compose.sqlite.yml` 或 `docker-compose.pgsql.yml`。将对应的 `cluster.sqlite.example.yaml` 或 `cluster.pgsql.example.yaml` 复制为 `cluster.yaml` 后，SQLite 路径使用 `/CLIProxyAPIHome/data/home.db`，PostgreSQL 主机使用 `postgres`。导入已有本地配置时二选一：
+Docker Compose 使用 `docker-compose.sqlite.yml` 或 `docker-compose.pgsql.yml`。将对应的 `cluster.sqlite.example.yaml` 或 `cluster.pgsql.example.yaml` 复制为 `cluster.yaml` 后，SQLite 路径使用 `/AI48Home/data/home.db`，PostgreSQL 主机使用 `postgres`。导入已有本地配置时二选一：
 
 ```bash
 COMPOSE_FILE=docker-compose.sqlite.yml
 # PostgreSQL: COMPOSE_FILE=docker-compose.pgsql.yml
 docker compose -f "$COMPOSE_FILE" run --rm \
-  -v "$PWD/config.yaml:/CLIProxyAPIHome/config.yaml:ro" \
+  -v "$PWD/config.yaml:/AI48Home/config.yaml:ro" \
   -v "$PWD/auths:/root/.cli-proxy-api" \
-  home ./CLIProxyAPIHome -import
+  home ./AI48Home -import
 ```
 
 ## 严格凭证并发限制
@@ -123,8 +125,8 @@ docker compose -f "$COMPOSE_FILE" run --rm \
 
 欢迎提交问题、功能建议和 Pull Request，请根据涉及的组件选择对应仓库：
 
-- **前端 / Web UI**：页面显示、交互等问题请提交到 [HMC Issues](https://github.com/router-for-me/Home-Management-Center/issues)，前端代码修改提交至 HMC 仓库。
-- **Home 后端**：服务运行、凭证调度、数据管理等问题请提交到 [CLIProxyAPIHome Issues](https://github.com/router-for-me/CLIProxyAPIHome/issues)，后端代码修改提交至本仓库。
+- **前端 / Web UI**：页面显示、交互等问题请提交到 [AI48HomeUI Issues](https://github.com/sofyan48/AI48HomeUI/issues)，前端代码修改提交至 AI48HomeUI 仓库。
+- **后端**：服务运行、凭证调度、数据管理等问题请提交到 [AI48Home Issues](https://github.com/sofyan48/AI48Home/issues)，后端代码修改提交至本仓库。
 
 同时涉及两个项目的改动，请关联对应的 Issue 或 Pull Request；接口变更还需同步更新相关的 [Management API](docs/management/api_CN.md) 或 [User API](docs/user/api_CN.md) 文档。
 
@@ -137,3 +139,7 @@ docker compose -f "$COMPOSE_FILE" run --rm \
 ## 许可证
 
 此项目根据 MIT 许可证授权 - 有关详细信息，请参阅 [LICENSE](LICENSE) 文件。
+
+## 致谢与许可
+
+AI48Home 是 [router-for-me/CLIProxyAPIHome](https://github.com/router-for-me/CLIProxyAPIHome) 与 [router-for-me/Home-Management-Center](https://github.com/router-for-me/Home-Management-Center) 的进一步开发版本，基于 [MIT 许可](LICENSE) 发布，并保留 Router-For.ME 原版权声明。

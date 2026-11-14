@@ -567,7 +567,7 @@ func createCACertificate(now time.Time) ([]byte, []byte, string, error) {
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName: "CLIProxyAPIHome CA",
+			CommonName: "AI48Home CA",
 		},
 		NotBefore:             now,
 		NotAfter:              now.AddDate(100, 0, 0),

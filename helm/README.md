@@ -1,6 +1,6 @@
 # CLIProxyAPI Helm deployment
 
-This chart follows the topology in `install.sh`: optional internal PostgreSQL, one CLIProxyAPIHome instance, and a configurable CPA worker pool. Workers run as a StatefulSet with optional HPA and automatic JWT enrollment. There is **no Nginx or headless Service**. The application Services expose Home on `8327` and workers on `8317`; enabling internal PostgreSQL adds its database Service.
+This chart follows the topology in `install.sh`: optional internal PostgreSQL, one AI48Home instance, and a configurable CPA worker pool. Workers run as a StatefulSet with optional HPA and automatic JWT enrollment. There is **no Nginx or headless Service**. The application Services expose Home on `8327` and workers on `8317`; enabling internal PostgreSQL adds its database Service.
 
 ## Requirements
 

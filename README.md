@@ -1,78 +1,80 @@
-# Home
+# AI48Home
 
 English | [中文](README_CN.md)
 
-Home is a comprehensive credential **management, scheduling, and distribution** service designed for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
+> AI48Home is based on [router-for-me/CLIProxyAPIHome](https://github.com/router-for-me/CLIProxyAPIHome) and its panel [Home Management Center](https://github.com/router-for-me/Home-Management-Center). Both are MIT-licensed; the original copyright notice is kept in [LICENSE](LICENSE).
+
+AI48Home is a comprehensive credential **management, scheduling, and distribution** service designed for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
 
 It serves as a centralized hub for managing and scheduling API credentials in large-scale CLIProxyAPI cluster deployments. CLIProxyAPI nodes communicate with Home to retrieve necessary API credentials and report usage statistics.
 
-## Home and Home Management Center (HMC)
+## AI48Home and AI48HomeUI
 
-Home provides the backend service, and [Home Management Center (HMC)](https://github.com/router-for-me/Home-Management-Center) provides a visual Web interface for Home. **The two open-source projects are maintained separately. Official Home releases embed HMC so they can be deployed and updated together.**
+AI48Home provides the backend service, and [AI48HomeUI](https://github.com/sofyan48/AI48HomeUI) (the AI48Hub panel) provides the Web interface. **The two projects are maintained separately. AI48Home releases and images embed AI48HomeUI so they can be deployed and updated together.**
 
 ### Deploying an official release
 
-Official Home binaries and Docker images include the Web interface, so HMC does not need to be deployed separately. After starting Home, open its address, such as `http://localhost:8327`. The administrator console is at `/management.html`, and the user workspace is at `/user.html`.
+AI48Home binaries and Docker images include the Web interface, so AI48HomeUI does not need to be deployed separately. After starting Home, open its address, such as `http://localhost:8327`. The administrator console is at `/management.html`, and the user workspace is at `/user.html`.
 
 Administrator access requires a management key; see the [authentication instructions](docs/management/api.md#authentication). Database setup and configuration import are covered under [Cluster Mode](#cluster-mode). Update the Home binary or Docker image to update the bundled Web interface.
 
-### Install from GHCR (AI48Hub build)
+### Install from GHCR
 
-This fork publishes multi-arch (`linux/amd64`, `linux/arm64`) images with the [AI48HomeUI](https://github.com/sofyan48/AI48HomeUI) panel embedded:
+AI48Home publishes multi-arch (`linux/amd64`, `linux/arm64`) images with the [AI48HomeUI](https://github.com/sofyan48/AI48HomeUI) panel embedded:
 
 | Tag | Source |
 | --- | --- |
-| `ghcr.io/sofyan48/cliproxyapihome:latest` | Latest `v*` release tag |
-| `ghcr.io/sofyan48/cliproxyapihome:<version>` | A specific release, e.g. `v1.2.0` |
-| `ghcr.io/sofyan48/cliproxyapihome:edge` | Latest `main` of AI48HomeUI (rebuilt on every panel push) |
+| `ghcr.io/sofyan48/ai48home:latest` | Latest `v*` release tag |
+| `ghcr.io/sofyan48/ai48home:<version>` | A specific release, e.g. `v1.2.0` |
+| `ghcr.io/sofyan48/ai48home:edge` | Latest `main` of AI48HomeUI (rebuilt on every panel push) |
 
 **Single node with SQLite**
 
 ```bash
-git clone --depth 1 https://github.com/sofyan48/CLIProxyAPIHome.git && cd CLIProxyAPIHome
+git clone --depth 1 https://github.com/sofyan48/AI48Home.git && cd AI48Home
 cp cluster.sqlite.example.yaml cluster.yaml          # set node and database options
 cp config.example.yaml config.yaml                   # set management.secret-key
 docker compose -f docker-compose.sqlite.yml pull
 docker compose -f docker-compose.sqlite.yml run --rm \
-  -v "$PWD/config.yaml:/CLIProxyAPIHome/config.yaml:ro" home ./CLIProxyAPIHome -import
+  -v "$PWD/config.yaml:/AI48Home/config.yaml:ro" home ./AI48Home -import
 docker compose -f docker-compose.sqlite.yml up -d
 ```
 
-Use `docker-compose.pgsql.yml` and `cluster.pgsql.example.yaml` for PostgreSQL. Pin a release with `CLI_PROXY_HOME_IMAGE=ghcr.io/sofyan48/cliproxyapihome:v1.2.0`.
+Use `docker-compose.pgsql.yml` and `cluster.pgsql.example.yaml` for PostgreSQL. Pin a release with `AI48HOME_IMAGE=ghcr.io/sofyan48/ai48home:v1.2.0`.
 
 **Full cluster (PostgreSQL, Home, three CPA workers, Nginx)**
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/sofyan48/CLIProxyAPIHome/main/install.sh
+curl -fsSLO https://raw.githubusercontent.com/sofyan48/AI48Home/main/install.sh
 sudo bash install.sh deploy            # writes /opt/cliproxy-cluster and starts everything
 sudo bash install.sh upgrade           # pull the newest image and replace Home only
 sudo bash install.sh upgrade edge      # switch to the newest panel build
 ```
 
-`install.sh` stores the image in `/opt/cliproxy-cluster/.env` as `HOME_IMAGE`; override it before `deploy` with `HOME_IMAGE=ghcr.io/sofyan48/cliproxyapihome:v1.2.0 sudo -E bash install.sh deploy`.
+`install.sh` stores the image in `/opt/cliproxy-cluster/.env` as `HOME_IMAGE`; override it before `deploy` with `HOME_IMAGE=ghcr.io/sofyan48/ai48home:v1.2.0 sudo -E bash install.sh deploy`.
 
 Open `http://<host>:8327/management.html` for the admin console and `/user.html` for the user portal.
 
-**Publishing images.** `.github/workflows/docker-image.yml` builds the panel from `sofyan48/AI48HomeUI`, embeds it, and pushes to GHCR using `GITHUB_TOKEN` (no extra secret). It runs on `v*` tags, on the `panel-updated` dispatch sent by AI48HomeUI, and manually from the Actions tab. After the first push, set the package visibility to **Public** under *Packages → cliproxyapihome → Package settings* so servers can pull without logging in.
+**Publishing images.** `.github/workflows/docker-image.yml` builds the panel from `sofyan48/AI48HomeUI`, embeds it, and pushes to GHCR using `GITHUB_TOKEN` (no extra secret). It runs on `v*` tags, on the `panel-updated` dispatch sent by AI48HomeUI, and manually from the Actions tab. After the first push, set the package visibility to **Public** under *Packages → ai48home → Package settings* so servers can pull without logging in.
 
 ### Developing both projects locally
 
-For frontend development, clone both repositories into sibling directories and run Home and HMC in separate terminals. Environment requirements are listed in Home's [go.mod](go.mod) and the [HMC README](https://github.com/router-for-me/Home-Management-Center#readme).
+For frontend development, clone both repositories into sibling directories and run AI48Home and AI48HomeUI in separate terminals. Environment requirements are listed in [go.mod](go.mod) and the [AI48HomeUI README](https://github.com/sofyan48/AI48HomeUI#readme).
 
 For a new local setup without `cluster.yaml`, copy Home's `config.example.yaml` to `config.yaml` and set a non-empty `management.secret-key`. Import that configuration into the local SQLite database, then start Home in one terminal:
 
 ```bash
-cd CLIProxyAPIHome
+cd AI48Home
 go run ./cmd/home -config config.yaml -import
 go run ./cmd/home -addr 127.0.0.1:8327
 ```
 
 An existing configured Home backend can be used directly.
 
-Start HMC in another terminal:
+Start AI48HomeUI in another terminal:
 
 ```bash
-cd Home-Management-Center
+cd AI48HomeUI
 bun install --frozen-lockfile
 bun run dev
 ```
@@ -81,18 +83,18 @@ Open `http://localhost:3000/management.html`, enter `http://127.0.0.1:8327` as t
 
 ### Building and releasing the bundled frontend
 
-To build Home with the Web interface from source, first build HMC, then copy the complete output into Home before compiling. Starting from the parent of the two sibling repositories:
+To build Home with the Web interface from source, first build AI48HomeUI, then copy the complete output into Home before compiling. Starting from the parent of the two sibling repositories:
 
 ```bash
-cd Home-Management-Center
+cd AI48HomeUI
 bun install --frozen-lockfile
 bun run build:embedded
-cp -R dist/. ../CLIProxyAPIHome/internal/managementasset/static/
-cd ../CLIProxyAPIHome
-go build -o CLIProxyAPIHome ./cmd/home
+cp -R dist/. ../AI48Home/internal/managementasset/static/
+cd ../AI48Home
+go build -o AI48Home ./cmd/home
 ```
 
-Home's source checkout does not include the generated frontend. Neither `go build` nor `docker build` builds HMC automatically, so prepare the complete frontend output before building either a binary or a Docker image.
+Home's source checkout does not include the generated frontend. Neither `go build` nor `docker build` builds AI48HomeUI automatically, so prepare the complete frontend output before building either a binary or a Docker image.
 
 Official releases automate this process: a version tag triggers the frontend build, followed by Home packaging and publication of binaries or Docker images. See the [binary release workflow](.github/workflows/release.yaml) and [Docker workflow](.github/workflows/docker-image.yml) for details.
 
@@ -124,7 +126,7 @@ PostgreSQL pool limits are configured in `cluster.yaml`: `pgsql.max-open-conns` 
 `config.yaml` and `auth-dir` are no longer runtime storage. They are import/export exchange formats only. To migrate an existing local setup into the database, run:
 
 ```bash
-./CLIProxyAPIHome -import
+./AI48Home -import
 ```
 
 By default, import reads `./config.yaml` and then resolves credentials from the `auth-dir` value inside that config. Use `-config <path>` to select another config file, `-auth-dir <path>` to override credential discovery, and `-sqlite-path <path>` when importing into a non-default SQLite database. Import is idempotent, so rerunning it with the same files does not duplicate records.
@@ -132,7 +134,7 @@ By default, import reads `./config.yaml` and then resolves credentials from the 
 To export config and credentials back to local files, run:
 
 ```bash
-./CLIProxyAPIHome -export
+./AI48Home -export
 ```
 
 Export writes `./config.yaml` and credential files under `~/.cli-proxy-api/` by default. Use `-export-dir <path>` to write `<path>/config.yaml` and credential files under `<path>/auths/`. It refuses to overwrite an existing `config.yaml` or a non-empty credential directory at the selected target.
@@ -143,15 +145,15 @@ In cluster mode, the Management API operates directly on database data. The defa
 
 RESP password authentication has been removed. Home RESP access only accepts mTLS-authenticated clients; CPA should connect with `-home-jwt` or configured TLS material. `allow-host` is only an IP allowlist and is not a password mechanism.
 
-Docker Compose uses `docker-compose.sqlite.yml` or `docker-compose.pgsql.yml`. Copy the matching `cluster.sqlite.example.yaml` or `cluster.pgsql.example.yaml` to `cluster.yaml`, then use `/CLIProxyAPIHome/data/home.db` for SQLite or `postgres` as the PostgreSQL host. Select either database type when importing existing local state:
+Docker Compose uses `docker-compose.sqlite.yml` or `docker-compose.pgsql.yml`. Copy the matching `cluster.sqlite.example.yaml` or `cluster.pgsql.example.yaml` to `cluster.yaml`, then use `/AI48Home/data/home.db` for SQLite or `postgres` as the PostgreSQL host. Select either database type when importing existing local state:
 
 ```bash
 COMPOSE_FILE=docker-compose.sqlite.yml
 # PostgreSQL: COMPOSE_FILE=docker-compose.pgsql.yml
 docker compose -f "$COMPOSE_FILE" run --rm \
-  -v "$PWD/config.yaml:/CLIProxyAPIHome/config.yaml:ro" \
+  -v "$PWD/config.yaml:/AI48Home/config.yaml:ro" \
   -v "$PWD/auths:/root/.cli-proxy-api" \
-  home ./CLIProxyAPIHome -import
+  home ./AI48Home -import
 ```
 
 ## Strict Credential Concurrency Limits
@@ -162,8 +164,8 @@ See the [Management API documentation](docs/management/api.md#credential-concurr
 
 Issues, feature requests, and pull requests are welcome. Choose the repository that maintains the affected component:
 
-- **Frontend / Web UI**: Report page display and interaction issues in [HMC Issues](https://github.com/router-for-me/Home-Management-Center/issues), and submit frontend changes to HMC.
-- **Home backend**: Report service, scheduling, and data management issues in [CLIProxyAPIHome Issues](https://github.com/router-for-me/CLIProxyAPIHome/issues), and submit backend changes here.
+- **Frontend / Web UI**: Report page display and interaction issues in [AI48HomeUI Issues](https://github.com/sofyan48/AI48HomeUI/issues), and submit frontend changes to AI48HomeUI.
+- **Backend**: Report service, scheduling, and data management issues in [AI48Home Issues](https://github.com/sofyan48/AI48Home/issues), and submit backend changes here.
 
 For changes spanning both projects, link the related issues or pull requests. Update the relevant [Management API](docs/management/api.md) or [User API](docs/user/api.md) documentation when an interface changes.
 
@@ -176,3 +178,7 @@ For changes spanning both projects, link the related issues or pull requests. Up
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+## Credits and License
+
+AI48Home is a further development of [router-for-me/CLIProxyAPIHome](https://github.com/router-for-me/CLIProxyAPIHome) and [router-for-me/Home-Management-Center](https://github.com/router-for-me/Home-Management-Center). Released under the [MIT License](LICENSE); the original Router-For.ME copyright notice is retained alongside the AI48Home notice.

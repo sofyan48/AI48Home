@@ -92,7 +92,7 @@ management:
   disable-control-panel: false
   # Disable the embedded management control panel HTTP routes when true.
   # Embedded panel source repository; Home does not download a remote panel at runtime.
-  panel-github-repository: "https://github.com/router-for-me/Home-Management-Center"
+  panel-github-repository: "https://github.com/sofyan48/AI48HomeUI"
   # Legacy compatibility flag. Embedded bundle mode does not perform runtime remote updates.
   # disable-auto-update-panel: false
 
@@ -109,7 +109,7 @@ user-email:
   # Absolute public URL of the embedded user panel. Production deployments should use HTTPS.
   public-user-url: "https://home.example.com/user.html"
   from-address: "no-reply@example.com"
-  from-name: "CPAHome"
+  from-name: "AI48Home"
   sender:
     type: "smtp"
     smtp:

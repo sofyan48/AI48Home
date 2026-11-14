@@ -1,6 +1,6 @@
-# CLIProxyAPIHome Cluster Management API 文档
+# AI48Home Cluster Management API 文档
 
-本文档描述 CLIProxyAPIHome 当前 DB-backed Management API。Home 启动时会初始化 runtime database，并注册 Home runtime 使用的 database-backed management route set。
+本文档描述 AI48Home 当前 DB-backed Management API。Home 启动时会初始化 runtime database，并注册 Home runtime 使用的 database-backed management route set。
 
 基础路径：
 
@@ -635,7 +635,7 @@ Home 在数据库和下发配置中保留兼容的
 
 ### GET `/server/latest-version`
 
-通过 GitHub release API 获取 CLIProxyAPIHome 最新版本；配置 `proxy-url` 时会使用该代理。
+通过 GitHub release API 获取 AI48Home 最新版本；配置 `proxy-url` 时会使用该代理。
 
 输入：无。
 
@@ -2998,7 +2998,7 @@ xAI 在单次探测超时内并行查询三个固定 Grok CLI endpoint：billing
 - 任一组件查询失败或数据不完整时，保留其他可用数值并返回 `partial`。至少一个组件提供有效数值时，月度／按量付费与周额度／产品明细两组分别替换：失败组保留仍有效的旧窗口、原数值、采集时间及有效期，未知新数值不能覆盖仍有效的旧数值。成功组可以清除已关闭的上限或已移除的条目；已确认免费时清除周额度及产品明细。已过期保留窗口会被清理，后续完整响应正常替换旧值。完全没有有效用量数值的失败或不完整采集保留旧快照、套餐及采集时间，并遵循正常重试退避。客户端需升级、授权失败及限流错误优先于笼统的解析错误。部分成功和整次失败均遵守所有失败组件中最长的 `Retry-After`，不受展示哪条错误影响；它只延后定时采集，不延长额度有效期。后续采集成功时清除错误及失败计数。已确认免费且额度为空的成功快照按上述规则替换旧值。
 - 低于 v3 的 xAI 快照在下一次满足活动门控的定时扫描中触发重采集，即使旧快照仍在有效期内。升级尝试在请求前记录，失败后遵循正常退避；成功时原子替换旧额度。
 
-collector 直接读取 DB 凭证，不接受 HMC 提交 URL。携带凭证的额度请求仅跟随原 scheme、host 及有效端口相同的重定向；跨源重定向及 HTTPS 降级会在转发请求前被拒绝。探测前会重新解析最新 DB 凭证，并直接使用其中当前保存的 access token，不会调用 OAuth 刷新；凭证刷新仍由独立的 runtime 刷新子系统负责。全局代理使用热更新后的当前配置，凭证级代理仍优先。统一使用 20 秒 timeout、PostgreSQL 下每个 Provider 并发上限 3（SQLite 下全局为 1）、单凭证 DB 租约，以及从 5 分钟开始、带凭证级 jitter、约 1 小时封顶的指数退避；`Retry-After` 可延后下次尝试。禁用凭证以及因 OAuth 刷新失败而被阻断调度的凭证不会被主动探测；模型执行 cooldown 不会阻止额度采集，额度采集自身的重试退避（`next_probe_at`）会推迟定时扫描但不会阻断人工强制重采集。冷却过期或刷新阻断解除后，持久化的 unavailable/error 状态不再永久阻止恢复探测。成功快照默认 30 分钟有效。探测失败时保留最后已知窗口，只写结构化脱敏错误。
+collector 直接读取 DB 凭证，不接受管理面板提交 URL。携带凭证的额度请求仅跟随原 scheme、host 及有效端口相同的重定向；跨源重定向及 HTTPS 降级会在转发请求前被拒绝。探测前会重新解析最新 DB 凭证，并直接使用其中当前保存的 access token，不会调用 OAuth 刷新；凭证刷新仍由独立的 runtime 刷新子系统负责。全局代理使用热更新后的当前配置，凭证级代理仍优先。统一使用 20 秒 timeout、PostgreSQL 下每个 Provider 并发上限 3（SQLite 下全局为 1）、单凭证 DB 租约，以及从 5 分钟开始、带凭证级 jitter、约 1 小时封顶的指数退避；`Retry-After` 可延后下次尝试。禁用凭证以及因 OAuth 刷新失败而被阻断调度的凭证不会被主动探测；模型执行 cooldown 不会阻止额度采集，额度采集自身的重试退避（`next_probe_at`）会推迟定时扫描但不会阻断人工强制重采集。冷却过期或刷新阻断解除后，持久化的 unavailable/error 状态不再永久阻止恢复探测。成功快照默认 30 分钟有效。探测失败时保留最后已知窗口，只写结构化脱敏错误。
 
 凭证核心字段：
 

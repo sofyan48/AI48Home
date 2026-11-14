@@ -1,6 +1,6 @@
 services:
   home:
-    image: ${CLI_PROXY_HOME_IMAGE:-ghcr.io/sofyan48/cliproxyapihome:latest}
+    image: ${AI48HOME_IMAGE:-ghcr.io/sofyan48/ai48home:latest}
     pull_policy: always
     environment:
       HOME_USER_EMAIL_SMTP_PASSWORD: ""
@@ -11,12 +11,12 @@ services:
         VERSION: ${VERSION:-dev}
         COMMIT: ${COMMIT:-none}
         BUILD_DATE: ${BUILD_DATE:-unknown}
-    container_name: cli-proxy-api-home
+    container_name: ai48home
     ports:
       - "8327:8327"
     volumes:
-      - ${CLI_PROXY_HOME_CLUSTER_PATH:-./cluster.yaml}:/CLIProxyAPIHome/cluster.yaml:ro
-      - ${CLI_PROXY_HOME_DATA_PATH:-./data}:/CLIProxyAPIHome/data
-      - ${CLI_PROXY_HOME_LOG_PATH:-./logs}:/CLIProxyAPIHome/logs
-      - ${CLI_PROXY_HOME_PLUGIN_PATH:-./plugins}:/CLIProxyAPIHome/plugins
+      - ${AI48HOME_CLUSTER_PATH:-./cluster.yaml}:/AI48Home/cluster.yaml:ro
+      - ${AI48HOME_DATA_PATH:-./data}:/AI48Home/data
+      - ${AI48HOME_LOG_PATH:-./logs}:/AI48Home/logs
+      - ${AI48HOME_PLUGIN_PATH:-./plugins}:/AI48Home/plugins
     restart: unless-stopped

@@ -15,19 +15,19 @@ ARG COMMIT=none
 ARG BUILD_DATE=unknown
 
 # Limit package compilation concurrency to reduce peak memory usage in small builders.
-RUN CGO_ENABLED=1 GOOS=linux go build -p=1 -buildvcs=false -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./CLIProxyAPIHome ./cmd/home/
+RUN CGO_ENABLED=1 GOOS=linux go build -p=1 -buildvcs=false -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./AI48Home ./cmd/home/
 
 FROM debian:bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certificates && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir /CLIProxyAPIHome
+RUN mkdir /AI48Home
 
-COPY --from=builder ./app/CLIProxyAPIHome /CLIProxyAPIHome/CLIProxyAPIHome
+COPY --from=builder ./app/AI48Home /AI48Home/AI48Home
 
-COPY config.example.yaml /CLIProxyAPIHome/config.example.yaml
+COPY config.example.yaml /AI48Home/config.example.yaml
 
-WORKDIR /CLIProxyAPIHome
+WORKDIR /AI48Home
 
 EXPOSE 8327
 
@@ -35,4 +35,4 @@ ENV TZ=Asia/Jakarta
 
 RUN cp /usr/share/zoneinfo/${TZ} /etc/localtime && echo "${TZ}" > /etc/timezone
 
-CMD ["./CLIProxyAPIHome"]
+CMD ["./AI48Home"]

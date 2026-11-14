@@ -1,4 +1,4 @@
-# CLIProxyAPIHome SQLite single-Home configuration.
+# AI48Home SQLite single-Home configuration.
 # Copy this file to cluster.yaml to configure the database and node settings.
 
 # Database configuration: SQLite
@@ -20,9 +20,9 @@ sqlite:
   # Alternative: absolute database paths.
   # Replace path above with the appropriate value for the deployment.
   # On Windows, use forward slashes to avoid YAML backslash escaping.
-  # path: "E:/CLIProxyAPIHome/data/home.db"
+  # path: "E:/AI48Home/data/home.db"
   # With docker-compose.sqlite.yml, use the persisted Home data volume.
-  # path: "/CLIProxyAPIHome/data/home.db"
+  # path: "/AI48Home/data/home.db"
 
   # Queries taking longer than this threshold are logged as slow SQL.
   # Optional; defaults to "200ms". Uses Go duration syntax such as "1s".

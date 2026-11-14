@@ -1,15 +1,17 @@
 # AGENTS.md
 
-CLIProxyAPIHome is the database-backed Home control plane for CLIProxyAPI (CPA). It manages credentials, scheduling, clustering, RESP distribution, usage ingestion, request-log ingestion, and Management API access for CPA nodes.
+AI48Home is the database-backed Home control plane for CLIProxyAPI (CPA). It manages credentials, scheduling, clustering, RESP distribution, usage ingestion, request-log ingestion, and Management API access for CPA nodes.
 
 ## Repository
-- GitHub: https://github.com/router-for-me/CLIProxyAPIHome
+- GitHub: https://github.com/sofyan48/AI48Home
+- Upstream (credit, merge source): https://github.com/router-for-me/CLIProxyAPIHome. The Go module path stays `github.com/router-for-me/CLIProxyAPIHome` to keep upstream merges clean.
+- Admin/user panel: https://github.com/sofyan48/AI48HomeUI
 - Related CPA repository: https://github.com/router-for-me/CLIProxyAPI
 
 ## Commands
 ```bash
 gofmt -w . # Format Go code after Go changes
-go build -o CLIProxyAPIHome ./cmd/home # Build
+go build -o AI48Home ./cmd/home # Build
 go run ./cmd/home # Run dev server
 go test ./... # Run all tests only when explicitly needed
 go test -v -run TestName ./path/to/pkg # Run a focused test only when explicitly needed
