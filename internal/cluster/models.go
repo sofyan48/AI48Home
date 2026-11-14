@@ -348,6 +348,8 @@ type UserRecord struct {
 	ResetAllowanceAvailable int64      `gorm:"column:reset_allowance_available;not null;default:0"`
 	ResetAllowanceExpiresAt *time.Time `gorm:"column:reset_allowance_expires_at"`
 	ResetAllowanceRenewsAt  *time.Time `gorm:"column:reset_allowance_renews_at"`
+	// BillingMultiplier scales every charge for the user; NULL means 1.
+	BillingMultiplier *float64 `gorm:"column:billing_multiplier"`
 	// Period cost limits (null = disabled). Subject is user; all API keys inherit.
 	// window_mode_*: first_use (default; first billable charge opens a duration
 	// window, Claude/Codex-style session), sliding (rolling last-N duration),
@@ -630,6 +632,7 @@ type AuthIndex struct {
 	Quota          coreauth.QuotaState
 	ModelStates    map[string]*coreauth.ModelState
 	BaseURL        string
+	ProxyURL       string
 	ModelsHash     string
 	Attributes     map[string]string
 	ModelMetadata  map[string]any

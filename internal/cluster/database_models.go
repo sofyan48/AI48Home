@@ -10,7 +10,7 @@ import (
 // currentDatabaseVersion is shared by the live schema migration gate and the
 // portable snapshot format. Increment it for every required startup migration
 // or snapshot format change, and retain mappings for prior snapshot formats.
-const currentDatabaseVersion = 13
+const currentDatabaseVersion = 18
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -225,28 +225,29 @@ func (databaseSnapshotV5UsageRecord) TableName() string {
 	return "usage"
 }
 
-// databaseSnapshotV7UserRecord preserves the user shape before registration approval.
-type databaseSnapshotV7UserRecord struct {
-	ID                   uint           `gorm:"column:id;primaryKey;autoIncrement"`
-	Username             string         `gorm:"column:username"`
-	Password             string         `gorm:"column:password"`
-	Email                *string        `gorm:"column:email"`
+// databaseSnapshotV14UserRecord freezes the user shape used by snapshot formats
+// v1 through v14, before per-user billing multipliers were added.
+type databaseSnapshotV14UserRecord struct {
+	ID                   uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_user_active_order,priority:2"`
+	Username             string         `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`
+	Password             string         `gorm:"column:password;type:text"`
+	Email                *string        `gorm:"column:email;type:text;index"`
 	EmailVerifiedAt      *time.Time     `gorm:"column:email_verified_at"`
-	EmailVersion         uint64         `gorm:"column:email_version"`
-	SessionVersion       uint64         `gorm:"column:session_version"`
-	Credits              float64        `gorm:"column:credits"`
-	CreditsUnlimited     bool           `gorm:"column:credits_unlimited"`
-	Timezone             string         `gorm:"column:timezone"`
+	EmailVersion         uint64         `gorm:"column:email_version;not null;default:0"`
+	SessionVersion       uint64         `gorm:"column:session_version;not null;default:0"`
+	Credits              float64        `gorm:"column:credits;not null;default:0"`
+	CreditsUnlimited     bool           `gorm:"column:credits_unlimited;not null;default:false"`
+	Timezone             string         `gorm:"column:timezone;not null;default:Asia/Shanghai"`
 	Limit5hCredits       *float64       `gorm:"column:limit_5h_credits"`
-	WindowMode5h         string         `gorm:"column:window_mode_5h"`
+	WindowMode5h         string         `gorm:"column:window_mode_5h;not null;default:first_use"`
 	Limit1dCredits       *float64       `gorm:"column:limit_1d_credits"`
-	WindowMode1d         string         `gorm:"column:window_mode_1d"`
+	WindowMode1d         string         `gorm:"column:window_mode_1d;not null;default:first_use"`
 	Limit7dCredits       *float64       `gorm:"column:limit_7d_credits"`
-	WindowMode7d         string         `gorm:"column:window_mode_7d"`
-	WeekResetDay         int            `gorm:"column:week_reset_day"`
-	WeekResetHour        int            `gorm:"column:week_reset_hour"`
+	WindowMode7d         string         `gorm:"column:window_mode_7d;not null;default:first_use"`
+	WeekResetDay         int            `gorm:"column:week_reset_day;not null;default:1"`
+	WeekResetHour        int            `gorm:"column:week_reset_hour;not null;default:0"`
 	Limit30dCredits      *float64       `gorm:"column:limit_30d_credits"`
-	WindowMode30d        string         `gorm:"column:window_mode_30d"`
+	WindowMode30d        string         `gorm:"column:window_mode_30d;not null;default:first_use"`
 	PeriodWindowStart5h  *time.Time     `gorm:"column:period_window_start_5h"`
 	PeriodWindowStart1d  *time.Time     `gorm:"column:period_window_start_1d"`
 	PeriodWindowStart7d  *time.Time     `gorm:"column:period_window_start_7d"`
@@ -259,10 +260,107 @@ type databaseSnapshotV7UserRecord struct {
 	Passkey              JSONB          `gorm:"column:passkey"`
 	CreatedAt            time.Time      `gorm:"column:created_at"`
 	UpdatedAt            time.Time      `gorm:"column:updated_at"`
-	DeletedAt            gorm.DeletedAt `gorm:"column:deleted_at"`
+	DeletedAt            gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_user_active_order,priority:1;index:idx_user_username_active,priority:2"`
 }
 
-func (databaseSnapshotV7UserRecord) TableName() string { return "user" }
+func (databaseSnapshotV14UserRecord) TableName() string {
+	return "user"
+}
+
+// databaseSnapshotV14BillingModelPriceRecord freezes the model price shape used
+// by snapshot formats v1 through v14, before extended dimensions and expressions.
+type databaseSnapshotV14BillingModelPriceRecord struct {
+	ID                        string         `gorm:"column:id;primaryKey"`
+	Provider                  string         `gorm:"column:provider;not null;index:idx_billing_model_price_lookup,priority:1"`
+	Model                     string         `gorm:"column:model;not null;index:idx_billing_model_price_lookup,priority:2"`
+	ServiceTier               string         `gorm:"column:service_tier;not null;default:*"`
+	MinInputTokens            int64          `gorm:"column:min_input_tokens;not null;default:0"`
+	InputPricePerMillion      float64        `gorm:"column:input_price_per_million;not null;default:0"`
+	OutputPricePerMillion     float64        `gorm:"column:output_price_per_million;not null;default:0"`
+	CacheReadPricePerMillion  float64        `gorm:"column:cache_read_price_per_million;not null;default:0"`
+	CacheWritePricePerMillion float64        `gorm:"column:cache_write_price_per_million;not null;default:0"`
+	RequestPrice              float64        `gorm:"column:request_price;not null;default:0"`
+	Source                    string         `gorm:"column:source;not null;default:manual"`
+	Enabled                   bool           `gorm:"column:enabled;not null;index:idx_billing_model_price_enabled"`
+	Note                      string         `gorm:"column:note;type:text"`
+	CreatedAt                 time.Time      `gorm:"column:created_at"`
+	UpdatedAt                 time.Time      `gorm:"column:updated_at"`
+	Revision                  int64          `gorm:"column:revision;not null;default:1"`
+	DeletedAt                 gorm.DeletedAt `gorm:"column:deleted_at;index"`
+}
+
+func (databaseSnapshotV14BillingModelPriceRecord) TableName() string {
+	return "billing_model_price"
+}
+
+// databaseSnapshotV14BillingChargeRecord freezes the billing charge shape used
+// by snapshot formats v1 through v14, before base_amount, multipliers, and breakdowns.
+type databaseSnapshotV14BillingChargeRecord struct {
+	ID               string    `gorm:"column:id;primaryKey;index:idx_billing_charge_time_order,priority:2,sort:desc"`
+	UsageID          uint      `gorm:"column:usage_id;not null;uniqueIndex"`
+	PayloadHash      string    `gorm:"column:payload_hash;not null;uniqueIndex"`
+	UserID           *uint     `gorm:"column:user_id;index:idx_billing_charge_user_time,priority:1"`
+	APIKeyID         *uint     `gorm:"column:api_key_id;index"`
+	APIKeyLabel      string    `gorm:"column:api_key_label"`
+	APIKeyMasked     string    `gorm:"column:api_key_masked"`
+	Provider         string    `gorm:"column:provider;index:idx_billing_charge_provider_model_time,priority:1"`
+	Model            string    `gorm:"column:model;index:idx_billing_charge_provider_model_time,priority:2"`
+	OriginalModel    string    `gorm:"column:original_model"`
+	ActualModel      string    `gorm:"column:actual_model"`
+	RequestID        string    `gorm:"column:request_id;index"`
+	Endpoint         string    `gorm:"column:endpoint;index"`
+	InputTokens      int64     `gorm:"column:input_tokens;not null;default:0"`
+	OutputTokens     int64     `gorm:"column:output_tokens;not null;default:0"`
+	CacheTokens      int64     `gorm:"column:cache_tokens;not null;default:0"`
+	Amount           float64   `gorm:"column:amount;not null;default:0"`
+	BalanceBefore    float64   `gorm:"column:balance_before;not null;default:0"`
+	BalanceAfter     float64   `gorm:"column:balance_after;not null;default:0"`
+	MatchedPriceRule string    `gorm:"column:matched_price_rule"`
+	PriceSnapshot    JSONB     `gorm:"column:price_snapshot;not null"`
+	RequestSummary   string    `gorm:"column:request_summary;type:text"`
+	CreatedAt        time.Time `gorm:"column:created_at;not null;index:idx_billing_charge_time_order,priority:1,sort:desc;index:idx_billing_charge_user_time,priority:2,sort:desc;index:idx_billing_charge_provider_model_time,priority:3,sort:desc"`
+}
+
+func (databaseSnapshotV14BillingChargeRecord) TableName() string {
+	return "billing_charge"
+}
+
+// databaseSnapshotV15QuotaSnapshotRecord freezes quota rows before plan expiry was added.
+type databaseSnapshotV15QuotaSnapshotRecord struct {
+	CredentialID        string     `gorm:"column:credential_id;primaryKey;size:128"`
+	QuotaStatus         string     `gorm:"column:quota_status;not null;size:32;index"`
+	CollectionStatus    string     `gorm:"column:collection_status;not null;size:32;index"`
+	Source              string     `gorm:"column:source;size:32;index"`
+	ObservedAt          *time.Time `gorm:"column:observed_at;index"`
+	ExpiresAt           *time.Time `gorm:"column:expires_at;index"`
+	LastAttemptAt       *time.Time `gorm:"column:last_attempt_at"`
+	LastSuccessAt       *time.Time `gorm:"column:last_success_at"`
+	NextProbeAt         *time.Time `gorm:"column:next_probe_at;index"`
+	LastActiveProbeAt   *time.Time `gorm:"column:last_active_probe_at" json:"-"`
+	ProbeActivityAt     *time.Time `gorm:"column:probe_activity_at" json:"-"`
+	ConsecutiveFailure  int        `gorm:"column:consecutive_failures;not null;default:0"`
+	ErrorCode           string     `gorm:"column:error_code;size:128"`
+	ErrorMessage        string     `gorm:"column:error_message;size:500"`
+	ErrorRetryable      bool       `gorm:"column:error_retryable;not null;default:false"`
+	ErrorOccurredAt     *time.Time `gorm:"column:error_occurred_at"`
+	ErrorStatusCode     int        `gorm:"column:error_status_code;not null;default:0"`
+	ErrorRequestID      string     `gorm:"column:error_request_id;size:128"`
+	HomeID              string     `gorm:"column:home_id;size:256"`
+	HomeLabel           string     `gorm:"column:home_label;size:256"`
+	CPANodeID           string     `gorm:"column:cpa_node_id;size:256"`
+	CPANodeLabel        string     `gorm:"column:cpa_node_label;size:256"`
+	PlanName            string     `gorm:"column:plan_name;size:64"`
+	PlanPremium         *bool      `gorm:"column:plan_premium"`
+	ResetCredits        JSONB      `gorm:"column:reset_credits"`
+	ProbeLeaseOwner     string     `gorm:"column:probe_lease_owner;size:256"`
+	ProbeLeaseExpiresAt *time.Time `gorm:"column:probe_lease_expires_at;index"`
+	ParserVersion       int        `gorm:"column:parser_version;not null;default:1"`
+	CollectorVersion    int        `gorm:"column:collector_version;not null;default:1"`
+	CreatedAt           time.Time  `gorm:"column:created_at"`
+	UpdatedAt           time.Time  `gorm:"column:updated_at"`
+}
+
+func (databaseSnapshotV15QuotaSnapshotRecord) TableName() string { return "quota_snapshot" }
 
 var databaseSnapshotV1Models = []databaseModel{
 	newDatabaseModel[databaseSnapshotV4AuthRecord]("auth", []string{"uuid"}, false, true),
@@ -272,7 +370,7 @@ var databaseSnapshotV1Models = []databaseModel{
 	newDatabaseModel[PluginTaskRecord]("plugin_tasks", []string{"id"}, true, false),
 	newDatabaseModel[PluginStoreAuthKeyRecord]("plugin_store_auth_key", []string{"id"}, false, true),
 	newDatabaseModel[PluginStoreAuthRecord]("plugin_store_auth", []string{"id"}, true, true),
-	newDatabaseModel[databaseSnapshotV7UserRecord]("user", []string{"id"}, true, true),
+	newDatabaseModel[databaseSnapshotV14UserRecord]("user", []string{"id"}, true, true),
 	newDatabaseModel[UserSecurityTokenRecord]("user_security_token", []string{"id"}, true, false),
 	newDatabaseModel[UserMailJobRecord]("user_mail_job", []string{"id"}, true, false),
 	newDatabaseModel[UserSecurityThrottleRecord]("user_security_throttle", []string{"key"}, false, false),
@@ -285,13 +383,13 @@ var databaseSnapshotV1Models = []databaseModel{
 	newDatabaseModel[databaseSnapshotV1CPANodeRecord]("cpa_node", []string{"home_ip", "home_port", "node_key"}, false, false),
 	newDatabaseModel[ClusterEventRecord]("cluster_events", []string{"id"}, true, false),
 	newDatabaseModel[databaseSnapshotV4UsageRecord]("usage", []string{"id"}, true, true),
-	newDatabaseModel[QuotaSnapshotRecord]("quota_snapshot", []string{"credential_id"}, false, true),
+	newDatabaseModel[databaseSnapshotV15QuotaSnapshotRecord]("quota_snapshot", []string{"credential_id"}, false, true),
 	newDatabaseModel[QuotaWindowRecord]("quota_window", []string{"credential_id", "window_id"}, false, true),
-	newDatabaseModel[BillingModelPriceRecord]("billing_model_price", []string{"id"}, false, true),
+	newDatabaseModel[databaseSnapshotV14BillingModelPriceRecord]("billing_model_price", []string{"id"}, false, true),
 	newDatabaseModel[BillingModelPriceImportPreviewRecord]("billing_model_price_import_preview", []string{"id"}, false, true),
 	newDatabaseModel[BillingModelPriceImportOperationRecord]("billing_model_price_import_operation", []string{"id"}, false, true),
 	newDatabaseModel[BillingBalanceRecord]("billing_balance_record", []string{"id"}, false, true),
-	newDatabaseModel[BillingChargeRecord]("billing_charge", []string{"id"}, false, true),
+	newDatabaseModel[databaseSnapshotV14BillingChargeRecord]("billing_charge", []string{"id"}, false, true),
 	newDatabaseModel[ProxyPoolRecord]("proxy_pool", []string{"id"}, false, true),
 	newDatabaseModel[AppLogRecord]("log", []string{"id"}, true, true),
 	newDatabaseModel[OAuthSessionRecord]("oauth_sessions", []string{"state"}, false, false),
@@ -312,20 +410,57 @@ var databaseSnapshotV4Models = databaseSnapshotV4ModelRegistry()
 // databaseSnapshotV5Models is the frozen database snapshot format v5 registry.
 var databaseSnapshotV5Models = databaseSnapshotV5ModelRegistry()
 
-// databaseSnapshotV6Models is the frozen database snapshot format v6 registry.
-var databaseSnapshotV6Models = currentDatabaseModels()
+// databaseSnapshotV6Models freezes the shared v6 and upstream v7..v14 shapes.
+var databaseSnapshotV6Models = databaseSnapshotV6ModelRegistry()
 
-// databaseSnapshotV7Models is the frozen database snapshot format v7 registry.
-var databaseSnapshotV7Models = append(append([]databaseModel(nil), databaseSnapshotV6Models...),
-	newDatabaseModel[CodexResetRedemptionRecord]("codex_reset_redemptions", []string{"credential_id", "request_key_hash"}, false, true),
-)
+// databaseSnapshotV15Models keeps the portable format used before plan expiry.
+var databaseSnapshotV15Models = databaseSnapshotV15ModelRegistry()
 
-// homeDatabaseModels is the current database snapshot registry.
-var databaseSnapshotV8Models = databaseSnapshotV8ModelRegistry()
+// databaseSnapshotV16Models freezes the format before the refresh journal.
+var databaseSnapshotV16Models = databaseSnapshotV16ModelRegistry()
 
-var databaseSnapshotV9Models = append(append([]databaseModel(nil), databaseSnapshotV8Models...),
-	newDatabaseModel[BillingRechargeRequestRecord]("billing_recharge_request", []string{"id"}, true, true),
-)
+// The pre-approval local user shape matches the upstream pre-multiplier shape.
+type databaseSnapshotV7UserRecord = databaseSnapshotV14UserRecord
+
+// Upstream v15..v17 must not acquire local approval/allowance fields.
+type databaseSnapshotV17UserRecord struct {
+	ID                   uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_user_active_order,priority:2"`
+	Username             string         `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`
+	Password             string         `gorm:"column:password;type:text"`
+	Email                *string        `gorm:"column:email;type:text;index"`
+	EmailVerifiedAt      *time.Time     `gorm:"column:email_verified_at"`
+	EmailVersion         uint64         `gorm:"column:email_version;not null;default:0"`
+	SessionVersion       uint64         `gorm:"column:session_version;not null;default:0"`
+	Credits              float64        `gorm:"column:credits;not null;default:0"`
+	CreditsUnlimited     bool           `gorm:"column:credits_unlimited;not null;default:false"`
+	Timezone             string         `gorm:"column:timezone;not null;default:Asia/Shanghai"`
+	Limit5hCredits       *float64       `gorm:"column:limit_5h_credits"`
+	WindowMode5h         string         `gorm:"column:window_mode_5h;not null;default:first_use"`
+	Limit1dCredits       *float64       `gorm:"column:limit_1d_credits"`
+	WindowMode1d         string         `gorm:"column:window_mode_1d;not null;default:first_use"`
+	Limit7dCredits       *float64       `gorm:"column:limit_7d_credits"`
+	WindowMode7d         string         `gorm:"column:window_mode_7d;not null;default:first_use"`
+	WeekResetDay         int            `gorm:"column:week_reset_day;not null;default:1"`
+	WeekResetHour        int            `gorm:"column:week_reset_hour;not null;default:0"`
+	Limit30dCredits      *float64       `gorm:"column:limit_30d_credits"`
+	WindowMode30d        string         `gorm:"column:window_mode_30d;not null;default:first_use"`
+	PeriodWindowStart5h  *time.Time     `gorm:"column:period_window_start_5h"`
+	PeriodWindowStart1d  *time.Time     `gorm:"column:period_window_start_1d"`
+	PeriodWindowStart7d  *time.Time     `gorm:"column:period_window_start_7d"`
+	PeriodWindowStart30d *time.Time     `gorm:"column:period_window_start_30d"`
+	UsageEpoch5h         *time.Time     `gorm:"column:usage_epoch_5h"`
+	UsageEpoch1d         *time.Time     `gorm:"column:usage_epoch_1d"`
+	UsageEpoch7d         *time.Time     `gorm:"column:usage_epoch_7d"`
+	UsageEpoch30d        *time.Time     `gorm:"column:usage_epoch_30d"`
+	MFA                  JSONB          `gorm:"column:mfa"`
+	Passkey              JSONB          `gorm:"column:passkey"`
+	CreatedAt            time.Time      `gorm:"column:created_at"`
+	UpdatedAt            time.Time      `gorm:"column:updated_at"`
+	DeletedAt            gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_user_active_order,priority:1;index:idx_user_username_active,priority:2"`
+	BillingMultiplier    *float64       `gorm:"column:billing_multiplier"`
+}
+
+func (databaseSnapshotV17UserRecord) TableName() string { return "user" }
 
 // Freeze the pre-allowance user shape for snapshot versions 8 and 9.
 type databaseSnapshotV9UserRecord struct {
@@ -367,13 +502,65 @@ type databaseSnapshotV9UserRecord struct {
 
 func (databaseSnapshotV9UserRecord) TableName() string { return "user" }
 
-var homeDatabaseModels = databaseSnapshotV10ModelRegistry()
+// Local snapshots v10..v13 predate upstream billing multipliers.
+type databaseSnapshotV13UserRecord struct {
+	ID                      uint           `gorm:"column:id;primaryKey;autoIncrement"`
+	Username                string         `gorm:"column:username"`
+	Password                string         `gorm:"column:password"`
+	Email                   *string        `gorm:"column:email"`
+	EmailVerifiedAt         *time.Time     `gorm:"column:email_verified_at"`
+	EmailVersion            uint64         `gorm:"column:email_version"`
+	SessionVersion          uint64         `gorm:"column:session_version"`
+	Credits                 float64        `gorm:"column:credits"`
+	CreditsUnlimited        bool           `gorm:"column:credits_unlimited"`
+	Timezone                string         `gorm:"column:timezone"`
+	Limit5hCredits          *float64       `gorm:"column:limit_5h_credits"`
+	WindowMode5h            string         `gorm:"column:window_mode_5h"`
+	Limit1dCredits          *float64       `gorm:"column:limit_1d_credits"`
+	WindowMode1d            string         `gorm:"column:window_mode_1d"`
+	Limit7dCredits          *float64       `gorm:"column:limit_7d_credits"`
+	WindowMode7d            string         `gorm:"column:window_mode_7d"`
+	WeekResetDay            int            `gorm:"column:week_reset_day"`
+	WeekResetHour           int            `gorm:"column:week_reset_hour"`
+	Limit30dCredits         *float64       `gorm:"column:limit_30d_credits"`
+	WindowMode30d           string         `gorm:"column:window_mode_30d"`
+	PeriodWindowStart5h     *time.Time     `gorm:"column:period_window_start_5h"`
+	PeriodWindowStart1d     *time.Time     `gorm:"column:period_window_start_1d"`
+	PeriodWindowStart7d     *time.Time     `gorm:"column:period_window_start_7d"`
+	PeriodWindowStart30d    *time.Time     `gorm:"column:period_window_start_30d"`
+	UsageEpoch5h            *time.Time     `gorm:"column:usage_epoch_5h"`
+	UsageEpoch1d            *time.Time     `gorm:"column:usage_epoch_1d"`
+	UsageEpoch7d            *time.Time     `gorm:"column:usage_epoch_7d"`
+	UsageEpoch30d           *time.Time     `gorm:"column:usage_epoch_30d"`
+	MFA                     JSONB          `gorm:"column:mfa"`
+	Passkey                 JSONB          `gorm:"column:passkey"`
+	CreatedAt               time.Time      `gorm:"column:created_at"`
+	UpdatedAt               time.Time      `gorm:"column:updated_at"`
+	DeletedAt               gorm.DeletedAt `gorm:"column:deleted_at"`
+	ApprovalPending         bool           `gorm:"column:approval_pending" json:"approval_pending"`
+	ResetAllowanceMode      string         `gorm:"column:reset_allowance_mode"`
+	ResetAllowanceAmount    int64          `gorm:"column:reset_allowance_amount"`
+	ResetAllowanceAvailable int64          `gorm:"column:reset_allowance_available"`
+	ResetAllowanceExpiresAt *time.Time     `gorm:"column:reset_allowance_expires_at"`
+	ResetAllowanceRenewsAt  *time.Time     `gorm:"column:reset_allowance_renews_at"`
+}
+
+func (databaseSnapshotV13UserRecord) TableName() string { return "user" }
+
+var databaseSnapshotV7Models = append(append([]databaseModel(nil), databaseSnapshotV6Models...),
+	newDatabaseModel[CodexResetRedemptionRecord]("codex_reset_redemptions", []string{"credential_id", "request_key_hash"}, false, true),
+)
+var databaseSnapshotV8Models = databaseSnapshotV8ModelRegistry()
+var databaseSnapshotV9Models = append(append([]databaseModel(nil), databaseSnapshotV8Models...),
+	newDatabaseModel[BillingRechargeRequestRecord]("billing_recharge_request", []string{"id"}, true, true),
+)
+var databaseSnapshotV10Models = databaseSnapshotV10ModelRegistry()
 
 func databaseSnapshotV10ModelRegistry() []databaseModel {
 	models := append([]databaseModel(nil), databaseSnapshotV9Models...)
 	for index := range models {
 		if models[index].name == "user" {
-			models[index] = newDatabaseModel[UserRecord]("user", []string{"id"}, true, true)
+			models[index] = newDatabaseModel[databaseSnapshotV13UserRecord]("user", []string{"id"}, true, true)
 		}
 	}
 	return models
@@ -389,11 +576,19 @@ func databaseSnapshotV8ModelRegistry() []databaseModel {
 	return models
 }
 
+var databaseSnapshotV17Models = append(append([]databaseModel(nil), databaseSnapshotV16Models...),
+	newDatabaseModel[CodexRefreshRecord]("codex_refresh_journal", []string{"grant_sha256"}, false, true),
+)
+
+// homeDatabaseModels combines both histories in the unambiguous v18 format.
+var homeDatabaseModels = currentDatabaseModels()
+
 var databaseMigrationOnlyModels = []databaseModel{
 	// Session bindings are expiring runtime state, not portable snapshot data.
 	newDatabaseModel[SessionAffinityRecord]("session_affinity", []string{"key"}, false, false),
 	newDatabaseModel[schemaMigrationRecord]("home_schema_migration", []string{"id"}, false, false),
 	newDatabaseModel[ClusterMasterGateRecord]("cluster_master_gate", []string{"id"}, false, false),
+	newDatabaseModel[ClusterRebalanceGateRecord]("cluster_rebalance_gate", []string{"id"}, false, false),
 	newDatabaseModel[CPARebalanceClientRecord]("cpa_rebalance_clients", []string{"fingerprint"}, false, false),
 	newDatabaseModel[CPARebalancePlanRecord]("cpa_rebalance_plans", []string{"id"}, false, false),
 	newDatabaseModel[CPALatencyRecord]("cpa_latency_summaries", []string{"fingerprint", "address"}, false, false),
@@ -454,7 +649,7 @@ func databaseSnapshotV5ModelRegistry() []databaseModel {
 	return models
 }
 
-func currentDatabaseModels() []databaseModel {
+func databaseSnapshotV6ModelRegistry() []databaseModel {
 	models := append([]databaseModel(nil), databaseSnapshotV5Models...)
 	for index := range models {
 		switch models[index].name {
@@ -465,6 +660,47 @@ func currentDatabaseModels() []databaseModel {
 	return models
 }
 
+func databaseSnapshotV15ModelRegistry() []databaseModel {
+	models := append([]databaseModel(nil), databaseSnapshotV6Models...)
+	for index := range models {
+		switch models[index].name {
+		case "user":
+			models[index] = newDatabaseModel[databaseSnapshotV17UserRecord]("user", []string{"id"}, true, true)
+		case "billing_model_price":
+			models[index] = newDatabaseModel[BillingModelPriceRecord]("billing_model_price", []string{"id"}, false, true)
+		case "billing_charge":
+			models[index] = newDatabaseModel[BillingChargeRecord]("billing_charge", []string{"id"}, false, true)
+		}
+	}
+	return models
+}
+
+func databaseSnapshotV16ModelRegistry() []databaseModel {
+	models := append([]databaseModel(nil), databaseSnapshotV15Models...)
+	for index := range models {
+		if models[index].name == "quota_snapshot" {
+			models[index] = newDatabaseModel[QuotaSnapshotRecord]("quota_snapshot", []string{"credential_id"}, false, true)
+			break
+		}
+	}
+	return models
+}
+
+func currentDatabaseModels() []databaseModel {
+	models := append([]databaseModel(nil), databaseSnapshotV17Models...)
+	for index := range models {
+		if models[index].name == "user" {
+			models[index] = newDatabaseModel[UserRecord]("user", []string{"id"}, true, true)
+		}
+	}
+	return append(models,
+		newDatabaseModel[CodexResetRedemptionRecord]("codex_reset_redemptions", []string{"credential_id", "request_key_hash"}, false, true),
+		newDatabaseModel[BillingRechargeRequestRecord]("billing_recharge_request", []string{"id"}, true, true),
+	)
+}
+
+// databaseSnapshotModels defaults to the local history for colliding versions.
+// Imports distinguish upstream snapshots by their exact table set instead.
 func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 	switch formatVersion {
 	case 1:
@@ -477,17 +713,24 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV4Models, true
 	case 5:
 		return databaseSnapshotV5Models, true
-	case 6:
-		return databaseSnapshotV6Models, true
 	case 7:
 		return databaseSnapshotV7Models, true
 	case 8:
 		return databaseSnapshotV8Models, true
 	case 9:
 		return databaseSnapshotV9Models, true
-	case 10, 11, 12, currentDatabaseVersion:
-		// Versions 11 through 13 add migrations, indexes, and runtime-only schema changes
-		// without changing the v10 portable table shapes.
+	case 10, 11, 12, 13:
+		return databaseSnapshotV10Models, true
+	case 6, 14:
+		// Upstream v7..v14 only added indexes, migrations, and transient tables.
+		return databaseSnapshotV6Models, true
+	case 15:
+		return databaseSnapshotV15Models, true
+	case 16:
+		return databaseSnapshotV16Models, true
+	case 17:
+		return databaseSnapshotV17Models, true
+	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:
 		return nil, false

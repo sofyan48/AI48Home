@@ -31,7 +31,7 @@ WORKDIR /CLIProxyAPIHome
 
 EXPOSE 8327
 
-ENV TZ=Asia/Shanghai
+ENV TZ=Asia/Jakarta
 
 RUN cp /usr/share/zoneinfo/${TZ} /etc/localtime && echo "${TZ}" > /etc/timezone
 

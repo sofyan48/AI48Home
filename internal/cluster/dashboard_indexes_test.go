@@ -120,19 +120,43 @@ func TestUsageTokenAccountingPendingQueriesUseLiteralVersion(t *testing.T) {
 	}
 }
 
+func modelsTableTypes(models []databaseModel) map[string]reflect.Type {
+	types := make(map[string]reflect.Type, len(models))
+	for _, model := range models {
+		types[model.name] = reflect.TypeOf(model.newRecord())
+	}
+	return types
+}
+
 func TestDatabaseSnapshotIndexOnlyVersionsRemainCompatible(t *testing.T) {
 	t.Parallel()
 
-	for _, version := range []int{10, 11, 12, currentDatabaseVersion} {
+	for _, version := range []int{6, 14} {
 		models, okModels := databaseSnapshotModels(version)
-		if !okModels || len(models) != len(homeDatabaseModels) {
+		if !okModels || len(models) != len(databaseSnapshotV6Models) {
 			t.Fatalf("snapshot version %d registry is incompatible", version)
 		}
 		for index, model := range models {
-			current := homeDatabaseModels[index]
-			if model.name != current.name || reflect.TypeOf(model.newRecord()) != reflect.TypeOf(current.newRecord()) {
-				t.Fatalf("snapshot version %d model %d differs from current table shape", version, index)
+			v6 := databaseSnapshotV6Models[index]
+			if model.name != v6.name || reflect.TypeOf(model.newRecord()) != reflect.TypeOf(v6.newRecord()) {
+				t.Fatalf("snapshot version %d model %d differs from v6 table shape", version, index)
 			}
 		}
+	}
+	for _, version := range []int{7, 8, 9, 10, 11, 12, 13} {
+		models, okModels := databaseSnapshotManifestModels(DatabaseSnapshotManifest{FormatVersion: version})
+		if !okModels || !reflect.DeepEqual(modelsTableTypes(models), modelsTableTypes(databaseSnapshotV6Models)) {
+			t.Fatalf("upstream snapshot version %d differs from v6 table shape", version)
+		}
+	}
+	for _, version := range []int{10, 11, 12, 13} {
+		models, okModels := databaseSnapshotModels(version)
+		if !okModels || !reflect.DeepEqual(modelsTableTypes(models), modelsTableTypes(databaseSnapshotV10Models)) {
+			t.Fatalf("local snapshot version %d differs from v10 table shape", version)
+		}
+	}
+	modelsCurrent, okCurrent := databaseSnapshotModels(currentDatabaseVersion)
+	if !okCurrent || len(modelsCurrent) != len(homeDatabaseModels) {
+		t.Fatalf("current snapshot version %d registry is incompatible", currentDatabaseVersion)
 	}
 }
