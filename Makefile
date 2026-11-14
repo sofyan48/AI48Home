@@ -1,9 +1,10 @@
-PANEL_REPOSITORY ?= sofyan48/CPAHomeUI
+PANEL_REPOSITORY ?= sofyan48/AI48HomeUI
 PANEL_SOURCE_DIR ?=
 PANEL_WORKDIR ?= $(CURDIR)/.tmp/home-management-center
 EMBED_STATIC_DIR := internal/managementasset/static
 LOCAL_BINARY ?= CLIProxyAPIHome
 DOCKER_IMAGE ?= cliproxyapi-home:embedded-local
+GHCR_IMAGE ?= ghcr.io/sofyan48/cliproxyapihome
 
 .PHONY: embed-local panel-assets-local docker-embed-local run-embedded-local run-downloaded-panel-local clean-embedded-local
 
@@ -19,10 +20,9 @@ panel-assets-local:
 	@if [ -n "$(PANEL_SOURCE_DIR)" ]; then \
 		panel_dir="$(abspath $(PANEL_SOURCE_DIR))"; \
 	else \
-		command -v gh >/dev/null || { echo "gh is required when PANEL_SOURCE_DIR is empty"; exit 1; }; \
 		rm -rf "$(PANEL_WORKDIR)"; \
 		mkdir -p "$(dir $(PANEL_WORKDIR))"; \
-		gh repo clone "$(PANEL_REPOSITORY)" "$(PANEL_WORKDIR)" -- --depth 1; \
+		git clone --depth 1 "https://github.com/$(PANEL_REPOSITORY).git" "$(PANEL_WORKDIR)"; \
 		panel_dir="$(PANEL_WORKDIR)"; \
 	fi; \
 	cd "$$panel_dir" && bun install --frozen-lockfile && bun run build:embedded; \

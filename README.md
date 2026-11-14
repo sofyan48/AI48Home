@@ -16,6 +16,45 @@ Official Home binaries and Docker images include the Web interface, so HMC does 
 
 Administrator access requires a management key; see the [authentication instructions](docs/management/api.md#authentication). Database setup and configuration import are covered under [Cluster Mode](#cluster-mode). Update the Home binary or Docker image to update the bundled Web interface.
 
+### Install from GHCR (AI48Hub build)
+
+This fork publishes multi-arch (`linux/amd64`, `linux/arm64`) images with the [AI48HomeUI](https://github.com/sofyan48/AI48HomeUI) panel embedded:
+
+| Tag | Source |
+| --- | --- |
+| `ghcr.io/sofyan48/cliproxyapihome:latest` | Latest `v*` release tag |
+| `ghcr.io/sofyan48/cliproxyapihome:<version>` | A specific release, e.g. `v1.2.0` |
+| `ghcr.io/sofyan48/cliproxyapihome:edge` | Latest `main` of AI48HomeUI (rebuilt on every panel push) |
+
+**Single node with SQLite**
+
+```bash
+git clone --depth 1 https://github.com/sofyan48/CLIProxyAPIHome.git && cd CLIProxyAPIHome
+cp cluster.sqlite.example.yaml cluster.yaml          # set node and database options
+cp config.example.yaml config.yaml                   # set management.secret-key
+docker compose -f docker-compose.sqlite.yml pull
+docker compose -f docker-compose.sqlite.yml run --rm \
+  -v "$PWD/config.yaml:/CLIProxyAPIHome/config.yaml:ro" home ./CLIProxyAPIHome -import
+docker compose -f docker-compose.sqlite.yml up -d
+```
+
+Use `docker-compose.pgsql.yml` and `cluster.pgsql.example.yaml` for PostgreSQL. Pin a release with `CLI_PROXY_HOME_IMAGE=ghcr.io/sofyan48/cliproxyapihome:v1.2.0`.
+
+**Full cluster (PostgreSQL, Home, three CPA workers, Nginx)**
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/sofyan48/CLIProxyAPIHome/main/install.sh
+sudo bash install.sh deploy            # writes /opt/cliproxy-cluster and starts everything
+sudo bash install.sh upgrade           # pull the newest image and replace Home only
+sudo bash install.sh upgrade edge      # switch to the newest panel build
+```
+
+`install.sh` stores the image in `/opt/cliproxy-cluster/.env` as `HOME_IMAGE`; override it before `deploy` with `HOME_IMAGE=ghcr.io/sofyan48/cliproxyapihome:v1.2.0 sudo -E bash install.sh deploy`.
+
+Open `http://<host>:8327/management.html` for the admin console and `/user.html` for the user portal.
+
+**Publishing images.** `.github/workflows/docker-image.yml` builds the panel from `sofyan48/AI48HomeUI`, embeds it, and pushes to GHCR using `GITHUB_TOKEN` (no extra secret). It runs on `v*` tags, on the `panel-updated` dispatch sent by AI48HomeUI, and manually from the Actions tab. After the first push, set the package visibility to **Public** under *Packages → cliproxyapihome → Package settings* so servers can pull without logging in.
+
 ### Developing both projects locally
 
 For frontend development, clone both repositories into sibling directories and run Home and HMC in separate terminals. Environment requirements are listed in Home's [go.mod](go.mod) and the [HMC README](https://github.com/router-for-me/Home-Management-Center#readme).

@@ -281,7 +281,8 @@ services:
     restart: unless-stopped
 
   home:
-    image: meongbego/cliphome
+    image: \${HOME_IMAGE:-ghcr.io/sofyan48/cliproxyapihome:latest}
+    pull_policy: always
     container_name: cliproxy-home
     environment:
       HOME_USER_EMAIL_SMTP_PASSWORD: ""
@@ -511,6 +512,29 @@ restart_cluster() {
   compose ps
 }
 
+upgrade_home() {
+  local management_key image
+
+  require_existing_installation
+  management_key="$(read_env_value MANAGEMENT_KEY)"
+
+  # Optional argument switches the tag, e.g. "upgrade v1.2.0" or "upgrade edge".
+  if [[ -n "$ACTION_ARG" ]]; then
+    image="$(read_env_value HOME_IMAGE)"
+    image="${image:-ghcr.io/sofyan48/cliproxyapihome:latest}"
+    set_env_value HOME_IMAGE "${image%:*}:${ACTION_ARG}"
+  fi
+
+  log "Menarik image Home terbaru: $(read_env_value HOME_IMAGE)"
+  compose pull home
+
+  log "Mengganti container Home (worker tetap berjalan dan reconnect otomatis)"
+  compose up -d --no-deps home
+  wait_for_home "$management_key"
+
+  compose ps home
+}
+
 repair_worker() {
   local worker_number="$1"
   local management_key backup_dir new_jwt
@@ -562,11 +586,15 @@ POSTGRES_DB=cliproxy_home
 POSTGRES_PASSWORD=$(random_hex 32)
 MANAGEMENT_KEY=$(random_hex 32)
 GATEWAY_API_KEY=sk-gateway-$(random_hex 24)
+HOME_IMAGE=${HOME_IMAGE:-ghcr.io/sofyan48/cliproxyapihome:latest}
 HOME_JWT_1=
 HOME_JWT_2=
 HOME_JWT_3=
 EOF_ENV
   fi
+
+  # Older installations predate HOME_IMAGE; pin them to the GHCR image.
+  grep -qE '^HOME_IMAGE=' "$ENV_FILE" || set_env_value HOME_IMAGE "${HOME_IMAGE:-ghcr.io/sofyan48/cliproxyapihome:latest}"
 
   postgres_password="$(read_env_value POSTGRES_PASSWORD)"
   management_key="$(read_env_value MANAGEMENT_KEY)"
@@ -620,6 +648,8 @@ Gateway API key : ${gateway_api_key}
 Directory       : ${BASE_DIR}
 
 Perintah operasional:
+  sudo bash $0 upgrade          # tarik image GHCR terbaru
+  sudo bash $0 upgrade v1.2.0   # pindah ke tag tertentu
   sudo bash $0 restart
   sudo bash $0 stop
   sudo bash $0 start
@@ -659,12 +689,15 @@ main() {
     status)
       show_status
       ;;
+    upgrade|update)
+      upgrade_home
+      ;;
     repair-worker)
       [[ -n "$ACTION_ARG" ]] || fail "Gunakan: $0 repair-worker <1|2|3>"
       repair_worker "$ACTION_ARG"
       ;;
     *)
-      fail "Action tidak dikenal: $ACTION. Gunakan deploy, restart, start, stop, status, atau repair-worker."
+      fail "Action tidak dikenal: $ACTION. Gunakan deploy, upgrade, restart, start, stop, status, atau repair-worker."
       ;;
   esac
 }

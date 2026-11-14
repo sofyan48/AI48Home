@@ -1,147 +1,169 @@
 name: docker-image
 
+# Publishes multi-arch images to GitHub Container Registry with the AI48Hub panel embedded.
+#   v* tags            -> ghcr.io/<owner>/cliproxyapihome:<tag> and :latest
+#   panel-updated event -> :edge (sent by sofyan48/AI48HomeUI after a push to main)
+#   manual run         -> :edge, or the tag given in the "tag" input
 on:
   push:
     tags:
       - v*
+  repository_dispatch:
+    types:
+      - panel-updated
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to publish (default: edge)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
 
 env:
-  APP_NAME: CLIProxyAPIHome
-  DOCKERHUB_REPO: eceasy/cli-proxy-api-home
+  PANEL_REPOSITORY: sofyan48/AI48HomeUI
+
+concurrency:
+  group: docker-image-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
 
 jobs:
-  docker_amd64:
+  build-panel:
+    name: build embedded panel
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Refresh models catalog
-        run: |
-          git fetch --depth 1 https://github.com/router-for-me/models.git main
-          git show FETCH_HEAD:models.json > internal/registry/models/models.json
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
+      - uses: oven-sh/setup-bun@v2
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Generate Build Metadata
-        run: |
-          echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
-          echo COMMIT=`git rev-parse --short HEAD` >> $GITHUB_ENV
-          echo BUILD_DATE=`date -u +%Y-%m-%dT%H:%M:%SZ` >> $GITHUB_ENV
-      - name: Build and push (amd64)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          build-args: |
-            VERSION=${{ env.VERSION }}
-            COMMIT=${{ env.COMMIT }}
-            BUILD_DATE=${{ env.BUILD_DATE }}
-          tags: |
-            ${{ env.DOCKERHUB_REPO }}:latest-amd64
-            ${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}-amd64
-
-  docker_arm64:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Refresh models catalog
-        run: |
-          git fetch --depth 1 https://github.com/router-for-me/models.git main
-          git show FETCH_HEAD:models.json > internal/registry/models/models.json
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Generate Build Metadata
-        run: |
-          echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
-          echo COMMIT=`git rev-parse --short HEAD` >> $GITHUB_ENV
-          echo BUILD_DATE=`date -u +%Y-%m-%dT%H:%M:%SZ` >> $GITHUB_ENV
-      - name: Build and push (arm64)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/arm64
-          push: true
-          build-args: |
-            VERSION=${{ env.VERSION }}
-            COMMIT=${{ env.COMMIT }}
-            BUILD_DATE=${{ env.BUILD_DATE }}
-          tags: |
-            ${{ env.DOCKERHUB_REPO }}:latest-arm64
-            ${{ env.DOCKERHUB_REPO }}:${{ env.VERSION }}-arm64
-
-  docker_manifest:
-    runs-on: ubuntu-latest
-    needs:
-      - docker_amd64
-      - docker_arm64
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Generate Build Metadata
-        run: |
-          echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
-          echo COMMIT=`git rev-parse --short HEAD` >> $GITHUB_ENV
-          echo BUILD_DATE=`date -u +%Y-%m-%dT%H:%M:%SZ` >> $GITHUB_ENV
-      - name: Create and push multi-arch manifests
-        run: |
-          docker buildx imagetools create \
-            --tag "${DOCKERHUB_REPO}:latest" \
-            "${DOCKERHUB_REPO}:latest-amd64" \
-            "${DOCKERHUB_REPO}:latest-arm64"
-          docker buildx imagetools create \
-            --tag "${DOCKERHUB_REPO}:${VERSION}" \
-            "${DOCKERHUB_REPO}:${VERSION}-amd64" \
-            "${DOCKERHUB_REPO}:${VERSION}-arm64"
-      - name: Cleanup temporary tags
-        continue-on-error: true
+          bun-version: '1.3.0'
+      - name: Build AI48HomeUI embedded bundle
         env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          PANEL_REF: ${{ github.event.client_payload.ref || 'main' }}
         run: |
           set -euo pipefail
-          namespace="${DOCKERHUB_REPO%%/*}"
-          repo_name="${DOCKERHUB_REPO#*/}"
+          git clone --depth 1 --branch "${PANEL_REF}" "https://github.com/${PANEL_REPOSITORY}.git" /tmp/panel
+          cd /tmp/panel
+          echo "Panel commit: $(git rev-parse --short HEAD)"
+          bun install --frozen-lockfile
+          bun run build:embedded
+          test -s dist/management.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: panel-static
+          path: /tmp/panel/dist/**
+          if-no-files-found: error
+          retention-days: 1
 
-          token="$(
-            curl -fsSL \
-              -H 'Content-Type: application/json' \
-              -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
-              'https://hub.docker.com/v2/users/login/' \
-              | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
-          )"
+  meta:
+    name: resolve image metadata
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      version: ${{ steps.meta.outputs.version }}
+      latest: ${{ steps.meta.outputs.latest }}
+    steps:
+      - id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            version="${GITHUB_REF_NAME}"
+            latest="true"
+          else
+            version="${INPUT_TAG:-edge}"
+            latest="false"
+          fi
+          {
+            echo "image=${image}"
+            echo "version=${version}"
+            echo "latest=${latest}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing ${image}:${version} (latest=${latest})"
 
-          delete_tag() {
-            local tag="$1"
-            local url="https://hub.docker.com/v2/repositories/${namespace}/${repo_name}/tags/${tag}/"
-            local http_code
-            http_code="$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE -H "Authorization: JWT ${token}" "${url}" || true)"
-            if [ "${http_code}" = "204" ] || [ "${http_code}" = "404" ]; then
-              echo "Docker Hub tag removed (or missing): ${DOCKERHUB_REPO}:${tag} (HTTP ${http_code})"
-              return 0
-            fi
-            echo "Docker Hub tag delete failed: ${DOCKERHUB_REPO}:${tag} (HTTP ${http_code})"
-            return 0
-          }
+  docker:
+    name: build ${{ matrix.arch }}
+    needs: [build-panel, meta]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Refresh models catalog
+        run: |
+          git fetch --depth 1 https://github.com/router-for-me/models.git main
+          git show FETCH_HEAD:models.json > internal/registry/models/models.json
+      - name: Download embedded panel
+        uses: actions/download-artifact@v4
+        with:
+          name: panel-static
+          path: internal/managementasset/static
+      - name: Verify embedded panel
+        run: test -s internal/managementasset/static/management.html
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build metadata
+        run: |
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - name: Build and push (${{ matrix.arch }})
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          provenance: false
+          build-args: |
+            VERSION=${{ needs.meta.outputs.version }}
+            COMMIT=${{ env.COMMIT }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=CLIProxyAPIHome with the embedded AI48Hub panel
+            org.opencontainers.image.licenses=MIT
+          tags: ${{ needs.meta.outputs.image }}:${{ needs.meta.outputs.version }}-${{ matrix.arch }}
 
-          delete_tag "latest-amd64"
-          delete_tag "latest-arm64"
-          delete_tag "${VERSION}-amd64"
-          delete_tag "${VERSION}-arm64"
+  manifest:
+    name: publish multi-arch manifest
+    needs: [meta, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create manifests
+        env:
+          IMAGE: ${{ needs.meta.outputs.image }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          LATEST: ${{ needs.meta.outputs.latest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION}" \
+            "${IMAGE}:${VERSION}-amd64" \
+            "${IMAGE}:${VERSION}-arm64"
+          if [[ "${LATEST}" == "true" ]]; then
+            docker buildx imagetools create \
+              --tag "${IMAGE}:latest" \
+              "${IMAGE}:${VERSION}-amd64" \
+              "${IMAGE}:${VERSION}-arm64"
+          fi
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"

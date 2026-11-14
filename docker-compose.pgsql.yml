@@ -16,7 +16,7 @@ services:
     restart: unless-stopped
 
   home:
-    image: ${CLI_PROXY_HOME_IMAGE:-eceasy/cli-proxy-api-home:latest}
+    image: ${CLI_PROXY_HOME_IMAGE:-ghcr.io/sofyan48/cliproxyapihome:latest}
     pull_policy: always
     environment:
       HOME_USER_EMAIL_SMTP_PASSWORD: ""
