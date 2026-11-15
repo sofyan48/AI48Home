@@ -13,12 +13,14 @@ http://<host>:<port>/v8/management
 ```text
 GET /
 GET /index.html
-GET /management.html
-GET /user.html
+GET /admin
+GET /admin/*
+GET /app
+GET /app/*
 GET /assets/*
 ```
 
-Panel assets 会在构建时内嵌到二进制中。
+Panel assets 会在构建时内嵌到二进制中。管理员入口使用 `/admin`（连接页面为 `/admin/connect`），用户工作区入口使用 `/app`（登录页面为 `/app/login`）。旧的 `/management.html` 和 `/user.html` 路由仍作为兼容别名保留，但新链接和部署说明应使用 `/admin` 和 `/app`。
 
 Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 使用 `cluster.yaml` 中的 `node.port`。runtime config 的 `server.port` 仅下发给 CPA 节点，不参与 Home 监听端口配置。
 
@@ -4214,7 +4216,7 @@ Query 参数：
 | `server.trusted-proxies` | array of string | 允许提供转发客户端地址的明确反向代理 IP/CIDR 列表；空列表表示全部不信任，trust-all 网段会被拒绝，修改后需重启。 |
 | `management.allow-remote` | boolean | 为 `true` 时允许非 localhost Management API 请求。 |
 | `management.secret-key` | string | Management key；本地配置模式下明文会在启动时 hash。 |
-| `management.disable-control-panel` | boolean | 禁用内嵌 panel routes：`/`、`/index.html`、`/management.html`、`/user.html`、`/assets/*`。 |
+| `management.disable-control-panel` | boolean | 禁用内嵌 panel routes：`/`、`/index.html`、`/admin`、`/admin/*`、`/app`、`/app/*`、`/assets/*` 以及旧版 HTML 别名。 |
 | `management.disable-auto-update-panel` | boolean | 兼容旧配置的字段；内嵌 panel assets 不会在运行时更新。 |
 | `management.panel-github-repository` | string | 兼容旧配置的内嵌 panel 源仓库字段。 |
 | `user-panel.cpa-public-url` | string | 可选的绝对 HTTP/HTTPS CPA 公开 URL，不允许包含凭据；展示时去除首尾空白。存储于 DB config，仅为 Home 展示元数据；非空时由 `GET /user/capabilities` 返回 `server_info.cpa_public_url`。不会控制监听器、集群或下游 CPA 运行配置。可通过 `PUT /v8/management/config/user-panel/cpa-public-url` 写入 JSON 字符串，或写入根级 `user-panel` 对象；空字符串清除展示元数据。 |

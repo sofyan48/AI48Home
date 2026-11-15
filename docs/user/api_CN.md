@@ -10,6 +10,8 @@ v8 升级将 [Management API](../management/api_CN.md) 更新为 `/v8/management
 http://<host>:<port>/user
 ```
 
+浏览器用户工作区入口为 `/app`，登录页面为 `/app/login`。这些 UI 路由与 `/user` API 基础路径不同。
+
 Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 使用 `cluster.yaml` 中的 `node.port`。v8 runtime config 的 `server.port` 仅下发给 CPA 节点，不参与 Home 监听端口配置。
 
 ## Runtime 模型
@@ -25,7 +27,7 @@ Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 
 ```yaml
 user-email:
   enabled: true
-  public-user-url: "https://home.example.com/user.html"
+  public-user-url: "https://home.example.com/app"
   from-address: "no-reply@example.com"
   from-name: "AI48Home"
   sender:

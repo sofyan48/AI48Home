@@ -13,12 +13,14 @@ Optional management panel:
 ```text
 GET /
 GET /index.html
-GET /management.html
-GET /user.html
+GET /admin
+GET /admin/*
+GET /app
+GET /app/*
 GET /assets/*
 ```
 
-The panel assets are embedded into the binary at build time.
+The panel assets are embedded into the binary at build time. Use `/admin` for the administrator console (`/admin/connect` to connect) and `/app` for the user workspace (`/app/login` to sign in). The legacy `/management.html` and `/user.html` routes remain available as compatibility aliases, but new links and deployment instructions should use `/admin` and `/app`.
 
 Home examples usually use port `8327`. An explicit `-addr` takes precedence; otherwise Home uses `node.port` from `cluster.yaml`. The runtime config `server.port` is distributed to CPA nodes and does not configure the Home listener.
 
@@ -4230,7 +4232,7 @@ The following paths use the v8 config layout. `/config` and `/config.yaml` suppo
 | `server.trusted-proxies` | array of string | Explicit reverse-proxy IP/CIDR allowlist used for forwarded client addresses. Empty trusts none; trust-all networks are rejected; restart after changes. |
 | `management.allow-remote` | boolean | Allows non-localhost Management API requests when true. |
 | `management.secret-key` | string | Management key. In local config mode, plaintext is hashed at startup. |
-| `management.disable-control-panel` | boolean | Disables the embedded panel routes: `/`, `/index.html`, `/management.html`, `/user.html`, and `/assets/*`. |
+| `management.disable-control-panel` | boolean | Disables the embedded panel routes: `/`, `/index.html`, `/admin`, `/admin/*`, `/app`, `/app/*`, `/assets/*`, and the legacy HTML aliases. |
 | `management.disable-auto-update-panel` | boolean | Legacy compatibility flag; embedded panel assets are not updated at runtime. |
 | `management.panel-github-repository` | string | Legacy compatibility field for the embedded panel source repository. |
 | `user-panel.cpa-public-url` | string | Optional absolute HTTP/HTTPS public CPA URL without credentials; surrounding whitespace is trimmed for display. DB-backed, Home-only display metadata exposed as `server_info.cpa_public_url` by `GET /user/capabilities` when nonempty. Never controls listeners, clustering, or downstream CPA runtime config. Set via `PUT /v8/management/config/user-panel/cpa-public-url` with a JSON string, or the root `user-panel` object; empty clears display metadata. |

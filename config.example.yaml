@@ -107,7 +107,7 @@ user-panel:
 user-email:
   enabled: false
   # Absolute public URL of the embedded user panel. Production deployments should use HTTPS.
-  public-user-url: "https://home.example.com/user.html"
+  public-user-url: "https://home.example.com/app"
   from-address: "no-reply@example.com"
   from-name: "AI48Home"
   sender:

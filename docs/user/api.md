@@ -10,6 +10,8 @@ Base URL:
 http://<host>:<port>/user
 ```
 
+The browser user workspace is at `/app`, with sign-in at `/app/login`. These UI routes are separate from the `/user` API base.
+
 Home examples usually use port `8327`. An explicit `-addr` takes precedence; otherwise Home uses `node.port` from `cluster.yaml`. The v8 runtime config `server.port` is distributed to CPA nodes and does not configure the Home listener.
 
 ## Runtime Model
@@ -25,7 +27,7 @@ Verified email and password recovery are optional and disabled by default. A usa
 ```yaml
 user-email:
   enabled: true
-  public-user-url: "https://home.example.com/user.html"
+  public-user-url: "https://home.example.com/app"
   from-address: "no-reply@example.com"
   from-name: "AI48Home"
   sender:

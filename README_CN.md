@@ -14,7 +14,7 @@ AI48Home 提供后端服务，[AI48HomeUI](https://github.com/sofyan48/AI48HomeU
 
 ### 部署正式发行版
 
-AI48Home 二进制和 Docker 镜像（`ghcr.io/sofyan48/ai48home`）已包含 Web 界面，无需单独部署 AI48HomeUI。启动 Home 后，访问其地址，例如 `http://localhost:8327`，即可打开页面；管理员入口为 `/management.html`，用户入口为 `/user.html`。
+AI48Home 二进制和 Docker 镜像（`ghcr.io/sofyan48/ai48home`）已包含 Web 界面，无需单独部署 AI48HomeUI。启动 Home 后，访问其地址，例如 `http://localhost:8327`，即可打开页面；管理员入口为 `/admin`，用户入口为 `/app`。
 
 管理员登录需要管理密钥，配置方法见[认证说明](docs/management/api_CN.md)。数据库配置与配置导入方式见下文[集群模式](#集群模式)。更新 Web 界面时，升级 Home 二进制或 Docker 镜像即可。
 
@@ -40,7 +40,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-打开 `http://localhost:3000/management.html`，将管理端点填写为 `http://127.0.0.1:8327`，使用管理密钥登录。修改前端后即可预览，无需重新编译 Home。
+打开 `http://localhost:3000/admin/connect`，将管理端点填写为 `http://127.0.0.1:8327`，使用管理密钥登录。修改前端后即可预览，无需重新编译 Home。
 
 ### 前端内嵌构建与发布流程
 

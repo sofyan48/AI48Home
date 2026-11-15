@@ -14,7 +14,7 @@ AI48Home provides the backend service, and [AI48HomeUI](https://github.com/sofya
 
 ### Deploying an official release
 
-AI48Home binaries and Docker images include the Web interface, so AI48HomeUI does not need to be deployed separately. After starting Home, open its address, such as `http://localhost:8327`. The administrator console is at `/management.html`, and the user workspace is at `/user.html`.
+AI48Home binaries and Docker images include the Web interface, so AI48HomeUI does not need to be deployed separately. After starting Home, open its address, such as `http://localhost:8327`. The administrator console is at `/admin`, and the user workspace is at `/app`.
 
 Administrator access requires a management key; see the [authentication instructions](docs/management/api.md#authentication). Database setup and configuration import are covered under [Cluster Mode](#cluster-mode). Update the Home binary or Docker image to update the bundled Web interface.
 
@@ -53,7 +53,7 @@ sudo bash install.sh upgrade edge      # switch to the newest panel build
 
 `install.sh` stores the image in `/opt/cliproxy-cluster/.env` as `HOME_IMAGE`; override it before `deploy` with `HOME_IMAGE=ghcr.io/sofyan48/ai48home:v1.2.0 sudo -E bash install.sh deploy`.
 
-Open `http://<host>:8327/management.html` for the admin console and `/user.html` for the user portal.
+Open `http://<host>:8327/admin` for the admin console and `http://<host>:8327/app` for the user portal.
 
 **Publishing images.** `.github/workflows/docker-image.yml` builds the panel from `sofyan48/AI48HomeUI`, embeds it, and pushes to GHCR using `GITHUB_TOKEN` (no extra secret). It runs on `v*` tags, on the `panel-updated` dispatch sent by AI48HomeUI, and manually from the Actions tab. After the first push, set the package visibility to **Public** under *Packages → ai48home → Package settings* so servers can pull without logging in.
 
@@ -79,7 +79,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-Open `http://localhost:3000/management.html`, enter `http://127.0.0.1:8327` as the management endpoint, and sign in with the management key. Frontend changes can be previewed without rebuilding Home.
+Open `http://localhost:3000/admin/connect`, enter `http://127.0.0.1:8327` as the management endpoint, and sign in with the management key. Frontend changes can be previewed without rebuilding Home.
 
 ### Building and releasing the bundled frontend
 
