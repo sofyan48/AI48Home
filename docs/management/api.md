@@ -645,7 +645,13 @@ Input: none.
 Example response:
 
 ```json
-{ "latest-version": "v7.0.0" }
+{ "latest-version": "v7.0.0", "release-published": true }
+```
+
+When the repository has no published release yet (GitHub returns 404), the endpoint returns HTTP 200 instead of an error:
+
+```json
+{ "latest-version": "", "release-published": false }
 ```
 
 Common error codes:

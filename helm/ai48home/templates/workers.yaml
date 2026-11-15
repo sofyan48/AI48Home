@@ -1,0 +1,192 @@
+{{- define "ai48home.workers.bootstrap" -}}
+import base64
+import json
+import os
+from pathlib import Path
+import tempfile
+import time
+import urllib.request
+
+
+def main():
+    identity = Path("/identity")
+    for directory in ("logs", "plugins"):
+        (identity / directory).mkdir(parents=True, exist_ok=True)
+
+    home = os.environ["HOME_URL"].rstrip("/")
+    headers = {"X-MANAGEMENT-KEY": os.environ["MANAGEMENT_KEY"]}
+    deadline = time.monotonic() + 180
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("Home readiness deadline exceeded")
+        try:
+            request = urllib.request.Request(home + "/v8/management/nodes", headers=headers)
+            with urllib.request.urlopen(request, timeout=min(5, remaining)) as response:
+                if response.status == 200:
+                    break
+        except Exception:
+            # Do not print response bodies or exceptions that could contain credentials.
+            pass
+        time.sleep(min(2, max(0, deadline - time.monotonic())))
+
+    token_path = identity / ".home-jwt"
+    if token_path.exists():
+        saved = token_path.read_text().strip()
+        if not saved:
+            raise RuntimeError("Saved worker identity is empty")
+        payload = saved.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        # Inspect only for the known Helm formatting defect; CPA verifies signatures.
+        if "%!s(<nil>)" not in str(claims.get("ip", "")):
+            token_path.chmod(0o600)
+            return
+        backup = identity / ".home-jwt.invalid-host.backup"
+        if backup.exists():
+            raise RuntimeError("Invalid identity backup already exists; manual recovery required")
+        token_path.chmod(0o600)
+        os.replace(token_path, backup)
+        print("Backed up JWT with invalid advertised hostname; requesting a new identity", flush=True)
+
+    # Do not retry enrollment: a lost response may already have created an identity.
+    request = urllib.request.Request(
+        home + "/v0/management/certificates/clients",
+        headers=headers,
+        data=b"",
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        token = json.load(response).get("home_jwt")
+    if not isinstance(token, str) or not token.strip():
+        raise RuntimeError("Home returned no worker identity")
+
+    descriptor, temporary = tempfile.mkstemp(prefix=".home-jwt-", dir=identity)
+    try:
+        with os.fdopen(descriptor, "w") as output:
+            os.fchmod(output.fileno(), 0o600)
+            output.write(token.strip())
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, token_path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+try:
+    main()
+except Exception:
+    raise SystemExit("Worker bootstrap failed; verify Home readiness, credentials, and identity storage")
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai48home.fullname" . }}-worker-bootstrap
+  labels:
+    {{- include "ai48home.labels" . | nindent 4 }}
+data:
+  bootstrap.py: |
+    {{- include "ai48home.workers.bootstrap" . | nindent 4 }}
+---
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "ai48home.fullname" . }}-workers
+  labels:
+    {{- include "ai48home.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "ai48home.fullname" . }}-worker
+  {{- if not .Values.workers.autoscaling.enabled }}
+  replicas: {{ .Values.workers.replicas }}
+  {{- end }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "ai48home.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "ai48home.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        checksum/bootstrap: {{ include "ai48home.workers.bootstrap" . | sha256sum }}
+        checksum/environment: {{ include (print $.Template.BasePath "/environment.yaml") . | sha256sum }}
+        checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: bootstrap
+          image: {{ .Values.bootstrap.image | quote }}
+          command: ["python", "/bootstrap/bootstrap.py"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "ai48home.fullname" . }}-worker-env
+          env:
+            - name: MANAGEMENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai48home.fullname" . }}-config
+                  key: management-key
+          volumeMounts:
+            - name: identity
+              mountPath: /identity
+            - name: bootstrap
+              mountPath: /bootstrap
+              readOnly: true
+      containers:
+        - name: worker
+          image: {{ printf "%s:%s" .Values.workers.image.repository .Values.workers.image.tag | quote }}
+          imagePullPolicy: {{ .Values.workers.image.pullPolicy }}
+          command: ["sh", "-eu", "-c"]
+          args:
+            - |
+              ordinal="${HOSTNAME##*-}"
+              sleep "$((WORKER_START_DELAY + ordinal * 2))"
+              exec ./CLIProxyAPI -home-jwt "$(cat /root/.cli-proxy-api/.home-jwt)"
+          envFrom:
+            - configMapRef:
+                name: {{ include "ai48home.fullname" . }}-worker-env
+          ports:
+            - name: http
+              containerPort: 8317
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: {{ add 60 (div (add (int .Values.workers.startDelaySeconds) (mul (int (ternary .Values.workers.autoscaling.maxReplicas .Values.workers.replicas .Values.workers.autoscaling.enabled)) 2)) 5) }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.workers.resources | nindent 12 }}
+          volumeMounts:
+            - name: identity
+              mountPath: /root/.cli-proxy-api
+            - name: identity
+              mountPath: /CLIProxyAPI/logs
+              subPath: logs
+            - name: identity
+              mountPath: /CLIProxyAPI/plugins
+              subPath: plugins
+      volumes:
+        - name: bootstrap
+          configMap:
+            name: {{ include "ai48home.fullname" . }}-worker-bootstrap
+  volumeClaimTemplates:
+    - metadata:
+        name: identity
+        labels:
+          {{- include "ai48home.labels" . | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- include "ai48home.storageClass" (dict "persistence" .Values.workers.persistence "global" .Values.global) | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.workers.persistence.size | quote }}

@@ -1,4 +1,4 @@
-# CLIProxyAPI Helm deployment
+# AI48Home Helm deployment
 
 This chart follows the topology in `install.sh`: optional internal PostgreSQL, one AI48Home instance, and a configurable CPA worker pool. Workers run as a StatefulSet with optional HPA and automatic JWT enrollment. There is **no Nginx or headless Service**. The application Services expose Home on `8327` and workers on `8317`; enabling internal PostgreSQL adds its database Service.
 
@@ -7,7 +7,7 @@ This chart follows the topology in `install.sh`: optional internal PostgreSQL, o
 - Helm 3+, Kubernetes, and a default StorageClass or configured `global.storageClass` / component `persistence.storageClass`.
 - For HPA: Metrics Server and Kubernetes 1.30+ for stable container resource metrics.
 - Images accessible to the cluster. Configure `imagePullSecrets` for private registries.
-- PostgreSQL credentials, a management key, and a gateway API key.
+- PostgreSQL credentials. The management key and gateway API key are optional; the chart generates them when unset.
 
 ## Install
 
@@ -15,14 +15,65 @@ Create a private values file outside version control and restrict its permission
 
 ```yaml
 secrets:
-  managementKey: "REPLACE_WITH_RANDOM_MANAGEMENT_KEY"
-  gatewayApiKey: "REPLACE_WITH_RANDOM_API_KEY"
+  managementKey: ""   # optional; generated when empty
+  gatewayApiKey: ""   # optional; generated when empty
 postgresql:
   auth:
     password: "REPLACE_WITH_RANDOM_DATABASE_PASSWORD"
 ```
 
-Generate each value independently, for example with `openssl rand -hex 32`.
+Generate supplied values independently, for example with `openssl rand -hex 32`.
+
+### Management and gateway keys
+
+When `secrets.managementKey` or `secrets.gatewayApiKey` is empty, the chart generates a random 48-character value on first install and stores it in the `<fullname>-config` Secret. Upgrades reuse the stored value through Helm `lookup`, so the keys do not rotate on every `helm upgrade`. An explicit value always takes precedence.
+
+Read the keys from the Secret (with the default `fullnameOverride: ai48home`; replace the namespace with yours):
+
+```bash
+# Management key: sign in at /admin/connect and call the Management API
+kubectl -n ai48home get secret ai48home-config \
+  -o jsonpath='{.data.management-key}' | base64 -d; echo
+
+# Gateway API key: client access to the worker API on port 8317
+kubectl -n ai48home get secret ai48home-config \
+  -o jsonpath='{.data.gateway-api-key}' | base64 -d; echo
+```
+
+The same commands are printed after `helm install`/`helm upgrade`, and can be shown again with `helm get notes ai48home -n ai48home`. They print secrets to the terminal; do not paste their output into logs or chat.
+
+Caveats:
+
+- `helm template` and `helm install --dry-run` cannot read cluster Secrets, so they render a new random value each time. Only real install/upgrade operations preserve the stored key.
+- Key generation stores the value only in the Secret and Helm release metadata. If you delete the `<fullname>-config` Secret, the next upgrade generates a new key that will not match the key already imported into the database. Back up the Secret, or set explicit values, for production.
+- GitOps tools that render with `helm template` (for example Argo CD) do not support `lookup` and would rotate the key on every sync. Set explicit values there.
+
+### Install the released chart
+
+Every `v*` release publishes the chart to GHCR as an OCI artifact and attaches the archive to the GitHub release. The chart version is the release tag without `v`, and its default Home image is pinned to the same release tag:
+
+| Reference | Source |
+| --- | --- |
+| `oci://ghcr.io/sofyan48/charts/ai48home --version <version>` | A specific release, e.g. `1.2.0` for tag `v1.2.0` |
+| `oci://ghcr.io/sofyan48/charts/ai48home:latest` | Latest `v*` release |
+| `ai48home-<version>.tgz`, `ai48home-latest.tgz` | GitHub release assets |
+
+```bash
+helm upgrade --install ai48home oci://ghcr.io/sofyan48/charts/ai48home \
+  --version 1.2.0 \
+  --namespace ai48home --create-namespace \
+  -f /path/to/private-values.yaml --wait --timeout 10m
+```
+
+Pin `--version` for production. To follow the newest release, pull the `latest` tag explicitly, because Helm resolves `--version` only against semantic versions:
+
+```bash
+helm pull oci://ghcr.io/sofyan48/charts/ai48home:latest
+```
+
+After the first publication, set the `charts/ai48home` package to **Public** under *Packages → Package settings* if clusters pull it without logging in.
+
+### Install from source
 
 From the repository root, verify the target cluster and install the source chart:
 
@@ -32,8 +83,8 @@ chmod 600 /path/to/private-values.yaml
 ```
 
 ```bash
-helm upgrade --install cliproxy ./helm/cliproxy \
-  --namespace cliproxy --create-namespace \
+helm upgrade --install ai48home ./helm/ai48home \
+  --namespace ai48home --create-namespace \
   -f /path/to/private-values.yaml --wait --timeout 10m
 ```
 
@@ -41,15 +92,21 @@ For Maxcloud, run `kube_maxcloud` first in your interactive shell. From the `hel
 
 ```bash
 kube_maxcloud
-helm lint ./cliproxy --strict -f values.yml
-helm package ./cliproxy --destination .
-helm upgrade --install cliproxy cliproxy-0.1.0.tgz \
+helm lint ./ai48home --strict -f values.yml
+helm package ./ai48home --destination .
+helm upgrade --install ai48home ai48home-0.1.1.tgz \
   -n dev --create-namespace -f values.yml --wait --timeout 10m
 ```
 
 `values.yml` is deployment-specific and may contain credentials. Do not commit or share it; use your own private values file for other environments. Repackage the chart after template changes: Helm does not read source templates when installing a `.tgz` archive.
 
-Pin `home.image.tag` to a tested version/digest-compatible tag for production; its default follows the unpinned Home image in `install.sh`.
+Pin `home.image.tag` to a tested version/digest-compatible tag for production; its default follows the unpinned Home image in `install.sh`. The Home templates expect the AI48Home image layout (`/AI48Home/AI48Home`), as built by this repository's `Dockerfile`.
+
+## Migrating from the `cliproxy` chart
+
+The chart was renamed from `cliproxyapihome` (release `cliproxy`, `fullnameOverride: cliproxy`) to `ai48home`. This changes resource names, PVC names, and the `app.kubernetes.io/name` selector label, which is immutable on Deployments and StatefulSets. Do not `helm upgrade` an existing `cliproxy` release with this chart in place.
+
+Install `ai48home` as a new release that points at the same external database, and copy any retained worker identity data if needed. Then verify it and uninstall the old `cliproxy` release. Back up PostgreSQL and PVCs first. Alternatively, keep an existing release on the old names by setting `fullnameOverride: cliproxy` and `nameOverride: cliproxyapihome` in its private values.
 
 ## Optional PostgreSQL
 
@@ -59,8 +116,8 @@ Pin `home.image.tag` to a tested version/digest-compatible tag for production; i
 postgresql:
   enabled: false
   auth:
-    username: cliproxy
-    database: cliproxy_home
+    username: ai48home
+    database: ai48home
     password: "YOUR_EXTERNAL_DATABASE_PASSWORD"
   external:
     host: postgres.example.com
@@ -74,18 +131,18 @@ The chart derives PostgreSQL environment variables and Home's `cluster.yaml` fro
 
 ## Services (no Nginx)
 
-With the default release `cliproxy`:
+With release name `ai48home` and the default `fullnameOverride: ai48home`:
 
 | Service | Port | Purpose |
 | --- | --- | --- |
-| `cliproxy-cliproxy-home` | 8327 | Home Management HTTP and RESP/mTLS |
-| `cliproxy-cliproxy-worker` | 8317 | Worker API traffic |
+| `ai48home-home` | 8327 | Home Management HTTP and RESP/mTLS |
+| `ai48home-worker` | 8317 | Worker API traffic |
 
-Set `fullnameOverride: cliproxy` for shorter `cliproxy-home` and `cliproxy-worker` names.
+Without `fullnameOverride`, names are prefixed with `<release>-ai48home`, for example `ai48home-ai48home-home`.
 
 Workers use one regular Service; there is no headless Service or per-pod DNS discovery. StatefulSet names and per-worker PVC identities remain stable.
 
-When upgrading from the chart with a headless Service, `serviceName` changes and Kubernetes requires recreating the StatefulSet. Preserve pods and PVCs using `kubectl -n dev delete statefulset cliproxy-workers --cascade=orphan`, then run Helm upgrade. Adjust the namespace and StatefulSet name for your release. Helm removes the obsolete headless Service.
+When upgrading from the chart with a headless Service, `serviceName` changes and Kubernetes requires recreating the StatefulSet. Preserve pods and PVCs using `kubectl -n dev delete statefulset ai48home-workers --cascade=orphan`, then run Helm upgrade. Adjust the namespace and StatefulSet name for your release. Helm removes the obsolete headless Service.
 
 ```yaml
 home:
@@ -101,8 +158,8 @@ Both support `ClusterIP`, `NodePort`, or `LoadBalancer`. Keep Home private unles
 For local access:
 
 ```bash
-kubectl -n cliproxy port-forward service/cliproxy-cliproxy-home 8327:8327
-kubectl -n cliproxy port-forward service/cliproxy-cliproxy-worker 8317:8317
+kubectl -n ai48home port-forward service/ai48home-home 8327:8327
+kubectl -n ai48home port-forward service/ai48home-worker 8317:8317
 ```
 
 Kubernetes Service balancing is connection-based, not Nginx `least_conn`. EndpointSlices track Ready workers as HPA changes replicas. New connections can reach available workers; existing keep-alive/streaming connections stay with their selected worker and cannot migrate when that pod terminates.
@@ -132,7 +189,7 @@ Do not put tokens, passwords, or API keys in `environment`. Required worker/data
 ## Bootstrap and persistence
 
 - Home checks the database before startup and imports `config.yaml` only if `public.config` is absent or empty. Startup fails on database errors rather than blindly importing.
-- The normal Home container mounts only `cluster.yaml`; runtime configuration remains DB-backed. After first import, changing the Helm management/API keys does not update existing DB config. Make changes through the Management API and keep chart values synchronized, particularly the management key used for worker enrollment.
+- The normal Home container mounts only `cluster.yaml`; runtime configuration remains DB-backed. After first import, changing the Helm management/API keys (supplied or generated) does not update existing DB config. Make changes through the Management API and keep chart values synchronized, particularly the management key used for worker enrollment.
 - Each worker has its own PVC and creates a unique Home JWT through the Management API. The JWT and enrollment identity survive restarts. Startup is staggered by 25 seconds plus 2 seconds per ordinal to allow old membership to expire. Increase the delay if you increase heartbeat timeout.
 - Home uses one replica with `Recreate`, avoiding overlapping instances with the same advertised identity. Do not point multiple chart releases at the same empty database during bootstrap.
 - Internal PostgreSQL uses persistent storage. Changing `postgresql.auth.password` does not rotate an existing database password; rotate the database separately and synchronize values.
@@ -152,13 +209,13 @@ A component's `persistence.storageClass` overrides this fallback. An explicit em
 ```bash
 kubectl get storageclass
 kubectl -n dev get pvc
-kubectl -n dev describe pvc identity-cliproxy-workers-0
+kubectl -n dev describe pvc identity-ai48home-workers-0
 ```
 
 Changing the StatefulSet template does not update existing PVCs. If a PVC is Pending and `storageClassName` is unset (not explicitly empty), Kubernetes allows assigning a class:
 
 ```bash
-kubectl -n dev patch pvc identity-cliproxy-workers-0 \
+kubectl -n dev patch pvc identity-ai48home-workers-0 \
   --type=merge -p '{"spec":{"storageClassName":"nfs-client"}}'
 ```
 
@@ -193,10 +250,10 @@ When enabled, Helm omits StatefulSet `spec.replicas` so subsequent upgrades do n
 Scale-up is limited to two pods per minute. Scale-down uses a five-minute stabilization window and removes at most one pod per minute. These policies do not guarantee completion of long-running streams: the current pod termination grace period is 30 seconds. HPA applies to the shared worker pool, not per-user isolation.
 
 ```bash
-kubectl -n dev get hpa cliproxy-workers
-kubectl -n dev describe hpa cliproxy-workers
-kubectl -n dev top pod -l app.kubernetes.io/instance=cliproxy --containers
-kubectl -n dev get endpointslice -l kubernetes.io/service-name=cliproxy-worker
+kubectl -n dev get hpa ai48home-workers
+kubectl -n dev describe hpa ai48home-workers
+kubectl -n dev top pod -l app.kubernetes.io/instance=ai48home --containers
+kubectl -n dev get endpointslice -l kubernetes.io/service-name=ai48home-worker
 ```
 
 During bootstrap or rolling updates, `FailedGetContainerResourceMetric` / `pods might be unready` can occur until workers are Ready and CPU samples are available. Check current HPA conditions rather than old events: `ScalingActive=True` with `ValidMetricFound` and a numeric CPU target means metrics are being read. `ScalingLimited=True` with `TooFewReplicas` means the minimum replica floor is preventing further scale-down, not a metrics failure.
@@ -206,9 +263,9 @@ For `socket hang up`, correlate the failing request with pod termination, rollou
 ## Validation
 
 ```bash
-helm lint ./helm/cliproxy --strict -f /path/to/private-values.yaml
-helm template cliproxy ./helm/cliproxy \
-  --namespace cliproxy -f /path/to/private-values.yaml
+helm lint ./helm/ai48home --strict -f /path/to/private-values.yaml
+helm template ai48home ./helm/ai48home \
+  --namespace ai48home -f /path/to/private-values.yaml
 ```
 
 Rendered manifests contain secrets. Do not publish them or commit them to source control.

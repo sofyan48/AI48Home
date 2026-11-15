@@ -1,0 +1,105 @@
+{{- if .Values.postgresql.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai48home.fullname" . }}-postgresql
+  labels:
+    {{- include "ai48home.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  ports:
+    - name: postgresql
+      port: {{ .Values.postgresql.port }}
+      targetPort: postgresql
+  selector:
+    {{- include "ai48home.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "ai48home.fullname" . }}-postgresql
+  labels:
+    {{- include "ai48home.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+spec:
+  serviceName: {{ include "ai48home.fullname" . }}-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ai48home.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgresql
+  template:
+    metadata:
+      labels:
+        {{- include "ai48home.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: postgresql
+      annotations:
+        checksum/environment: {{ include (print $.Template.BasePath "/environment.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: postgresql
+          image: {{ printf "%s:%s" .Values.postgresql.image.repository .Values.postgresql.image.tag | quote }}
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          args: ["-p", {{ .Values.postgresql.port | quote }}]
+          envFrom:
+            - configMapRef:
+                name: {{ include "ai48home.fullname" . }}-postgresql-env
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai48home.fullname" . }}-config
+                  key: postgres-password
+          ports:
+            - name: postgresql
+              containerPort: {{ .Values.postgresql.port }}
+          startupProbe:
+            exec:
+              command:
+                - pg_isready
+                - -h
+                - "127.0.0.1"
+                - -p
+                - {{ .Values.postgresql.port | quote }}
+                - -U
+                - {{ .Values.postgresql.auth.username | quote }}
+                - -d
+                - {{ .Values.postgresql.auth.database | quote }}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -h
+                - "127.0.0.1"
+                - -p
+                - {{ .Values.postgresql.port | quote }}
+                - -U
+                - {{ .Values.postgresql.auth.username | quote }}
+                - -d
+                - {{ .Values.postgresql.auth.database | quote }}
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "ai48home.labels" . | nindent 10 }}
+          app.kubernetes.io/component: postgresql
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- include "ai48home.storageClass" (dict "persistence" .Values.postgresql.persistence "global" .Values.global) | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.persistence.size | quote }}
+{{- end }}

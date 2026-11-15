@@ -15,9 +15,11 @@ import (
 )
 
 const (
-	latestReleaseURL       = "https://api.github.com/repos/sofyan48/AI48Home/releases/latest"
 	latestReleaseUserAgent = "AI48Home"
 )
+
+// latestReleaseURL is a variable so tests can point it at a local server.
+var latestReleaseURL = "https://api.github.com/repos/sofyan48/AI48Home/releases/latest"
 
 type releaseInfo struct {
 	TagName string `json:"tag_name"`
@@ -67,6 +69,13 @@ func (h *Handler) GetLatestVersion(c *gin.Context) {
 		}
 	}()
 
+	// GitHub returns 404 when the repository has no published release yet.
+	// That is a normal state, not a diagnostic failure.
+	if resp.StatusCode == http.StatusNotFound {
+		c.JSON(http.StatusOK, gin.H{"latest-version": "", "release-published": false})
+		return
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "unexpected_status", "message": fmt.Sprintf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))})
@@ -88,5 +97,5 @@ func (h *Handler) GetLatestVersion(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"latest-version": version})
+	c.JSON(http.StatusOK, gin.H{"latest-version": version, "release-published": true})
 }

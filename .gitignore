@@ -11,8 +11,8 @@ internal/managementasset/static/*
 dist/
 .tmp/
 test-output
-CLIProxyAPIHome
-AI48Home
+/CLIProxyAPIHome
+/AI48Home
 config.yaml
 cluster.yaml
 home.db

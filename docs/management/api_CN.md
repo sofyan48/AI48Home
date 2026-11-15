@@ -644,7 +644,13 @@ Home 在数据库和下发配置中保留兼容的
 输出示例：
 
 ```json
-{ "latest-version": "v7.0.0" }
+{ "latest-version": "v7.0.0", "release-published": true }
+```
+
+仓库尚未发布任何 release（GitHub 返回 404）时，该接口返回 HTTP 200，而不是错误：
+
+```json
+{ "latest-version": "", "release-published": false }
 ```
 
 常见错误码：
