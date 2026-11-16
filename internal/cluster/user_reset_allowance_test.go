@@ -67,7 +67,7 @@ func TestUserResetAllowanceMigration(t *testing.T) {
 			t.Fatalf("unsupported version %d", version)
 		}
 		_, hasAllowance := databaseSnapshotModelType(t, models, "user").Elem().FieldByName("ResetAllowanceMode")
-		if hasAllowance != (version >= 10 && version <= 13 || version == currentDatabaseVersion) {
+		if hasAllowance != (version >= 10 && version <= 13 || version == 18 || version == currentDatabaseVersion) {
 			t.Fatalf("snapshot v%d allowance shape changed", version)
 		}
 	}

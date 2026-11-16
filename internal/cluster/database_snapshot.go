@@ -429,20 +429,32 @@ func OpenDatabaseSnapshot(ctx context.Context, path string) (*ValidatedDatabaseS
 	}, nil
 }
 
-// Versions 7..13 were independently assigned by the local and upstream histories.
-// Local archives always include the redemption table, even when it has no rows.
-// Select a frozen registry before validating the full entry set and row shapes;
-// never relax unknown-field or extra-table validation to accommodate a collision.
+// Versions 7..13 and 18 were independently assigned by the local and upstream
+// histories. Local archives always include the redemption table, even when it
+// has no rows. Select a frozen registry before validating the full entry set and
+// row shapes; never relax unknown-field or extra-table validation to accommodate
+// a collision.
 func databaseSnapshotManifestModels(manifest DatabaseSnapshotManifest) ([]databaseModel, bool) {
-	if manifest.FormatVersion >= 7 && manifest.FormatVersion <= 13 {
-		for _, table := range manifest.Tables {
-			if table.Name == "codex_reset_redemptions" {
-				return databaseSnapshotModels(manifest.FormatVersion)
-			}
+	version := manifest.FormatVersion
+	if version >= 7 && version <= 13 || version == 18 {
+		if databaseSnapshotManifestHasTable(manifest, "codex_reset_redemptions") {
+			return databaseSnapshotModels(version)
+		}
+		if version == 18 {
+			return databaseSnapshotUpstreamV18Models, true
 		}
 		return databaseSnapshotV6Models, true
 	}
-	return databaseSnapshotModels(manifest.FormatVersion)
+	return databaseSnapshotModels(version)
+}
+
+func databaseSnapshotManifestHasTable(manifest DatabaseSnapshotManifest, name string) bool {
+	for _, table := range manifest.Tables {
+		if table.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func validateDatabaseSnapshotEntries(reader *zip.Reader) (map[string]*zip.File, error) {
