@@ -1,6 +1,6 @@
-# CLIProxyAPIHome User API
+# AI48Home User API
 
-This document describes the current DB-backed User API exposed by CLIProxyAPIHome. The User API is separate from the Management API and does not use the Management API secret key.
+This document describes the current DB-backed User API exposed by AI48Home. The User API is separate from the Management API and does not use the Management API secret key.
 
 The v8 upgrade changes the [Management API](../management/api.md) to `/v8/management`; the User API remains under `/user` with the same authentication and resource paths. `/user/api-keys` manages the signed-in user's client access keys. Upstream provider-key groups belong to Management API `/config/api-keys`, and administrator access-key operations use `/access/api-keys` relative to the management base.
 
@@ -9,6 +9,8 @@ Base URL:
 ```text
 http://<host>:<port>/user
 ```
+
+The browser user workspace is at `/app`, with sign-in at `/app/login`. These UI routes are separate from the `/user` API base.
 
 Home examples usually use port `8327`. An explicit `-addr` takes precedence; otherwise Home uses `node.port` from `cluster.yaml`. The v8 runtime config `server.port` is distributed to CPA nodes and does not configure the Home listener.
 
@@ -25,9 +27,9 @@ Verified email and password recovery are optional and disabled by default. A usa
 ```yaml
 user-email:
   enabled: true
-  public-user-url: "https://home.example.com/user.html"
+  public-user-url: "https://home.example.com/app"
   from-address: "no-reply@example.com"
-  from-name: "CLIProxyAPIHome"
+  from-name: "AI48Home"
   sender:
     type: "smtp"
     smtp:
@@ -593,8 +595,8 @@ Example response:
 ```json
 {
   "secret": "BASE32SECRET",
-  "otp_auth_url": "otpauth://totp/CLIProxyAPIHome:alice?...",
-  "issuer": "CLIProxyAPIHome",
+  "otp_auth_url": "otpauth://totp/AI48Home:alice?...",
+  "issuer": "AI48Home",
   "period": 30,
   "digits": 6,
   "algorithm": "SHA1",
@@ -610,7 +612,7 @@ Example request:
 
 ```json
 {
-  "issuer": "CLIProxyAPIHome",
+  "issuer": "AI48Home",
   "regenerate": true
 }
 ```
@@ -642,7 +644,7 @@ Fields:
 | --- | --- | --- | --- |
 | `secret` | string | yes | Base32 TOTP secret from `/totp`. |
 | `code` | string | yes | Current TOTP code. Aliases: `totp_code`, `totp-code`, `totp`. |
-| `issuer` | string | no | Issuer stored in TOTP metadata. Defaults to `CLIProxyAPIHome`. |
+| `issuer` | string | no | Issuer stored in TOTP metadata. Defaults to `AI48Home`. |
 
 Response: same shape as `POST/PATCH /password`.
 

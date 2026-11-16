@@ -1,4 +1,4 @@
-# CLIProxyAPIHome PostgreSQL cluster mode configuration.
+# AI48Home PostgreSQL cluster mode configuration.
 # Copy this file to cluster.yaml to enable cluster behavior.
 
 # Database configuration: PostgreSQL

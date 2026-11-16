@@ -20,7 +20,7 @@ const logSourceLabelWidth = len("255.255.255.255")
 
 // LogFormatter defines a custom log format for logrus.
 // This formatter adds source, timestamp, level, request ID, and source location to each log entry.
-// Format: [CLIProxyAPIHome] [2025-12-23 20:14:04] [debug] [manager.go:524] | a1b2c3d4 | Use API key sk-9...0RHO for model gpt-5.2
+// Format: [AI48Home       ] [2025-12-23 20:14:04] [debug] [manager.go:524] | a1b2c3d4 | Use API key sk-9...0RHO for model gpt-5.2
 type LogFormatter struct{}
 
 // FormatLogSourcePrefix renders a fixed-width log source column.
@@ -90,7 +90,7 @@ func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
 		}
 	}
 
-	sourcePrefix := FormatLogSourcePrefix("CLIProxyAPIHome")
+	sourcePrefix := FormatLogSourcePrefix("AI48Home")
 	var formatted string
 	if entry.Caller != nil {
 		formatted = fmt.Sprintf("%s [%s] [%s] [%s] [%s:%d] %s%s\n", sourcePrefix, timestamp, reqID, levelStr, filepath.Base(entry.Caller.File), entry.Caller.Line, message, fieldsStr)

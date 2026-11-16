@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	DefaultPanelGitHubRepository = "https://github.com/router-for-me/Home-Management-Center"
+	DefaultPanelGitHubRepository = "https://github.com/sofyan48/AI48HomeUI"
 	DefaultPprofAddr             = "127.0.0.1:8316"
 	DefaultCPAPort               = 8317
 )

@@ -21,7 +21,7 @@ import (
 func TestSMTPSenderRenderMessageNormalizesBodyLineEndings(t *testing.T) {
 	sender := &SMTPSender{
 		fromAddress: "no-reply@example.com",
-		fromName:    "CLIProxyAPIHome",
+		fromName:    "AI48Home",
 	}
 	rendered := sender.renderMessage("alice@example.com", Message{
 		Subject: "Line endings",
@@ -74,7 +74,7 @@ func TestSMTPSenderTreatsQuitFailureAfterAcceptedDataAsSuccess(t *testing.T) {
 			Timeout: time.Second,
 		},
 		fromAddress: "no-reply@example.com",
-		fromName:    "CLIProxyAPIHome",
+		fromName:    "AI48Home",
 	}
 	if errSend := sender.Send(nil, Message{
 		To:      "alice@example.com",
@@ -121,7 +121,7 @@ func TestSMTPSenderDeliversThroughSTARTTLS(t *testing.T) {
 			Timeout:  2 * time.Second,
 		},
 		fromAddress: "no-reply@example.com",
-		fromName:    "CLIProxyAPIHome",
+		fromName:    "AI48Home",
 		tlsConfig: &tls.Config{
 			RootCAs:    roots,
 			ServerName: host,

@@ -1,6 +1,6 @@
-# CLIProxyAPIHome Cluster Management API
+# AI48Home Cluster Management API
 
-This document describes the current DB-backed Management API exposed by CLIProxyAPIHome. Home startup initializes a runtime database and registers the database-backed management route set used by the Home runtime.
+This document describes the current DB-backed Management API exposed by AI48Home. Home startup initializes a runtime database and registers the database-backed management route set used by the Home runtime.
 
 Base URL:
 
@@ -13,12 +13,14 @@ Optional management panel:
 ```text
 GET /
 GET /index.html
-GET /management.html
-GET /user.html
+GET /admin
+GET /admin/*
+GET /app
+GET /app/*
 GET /assets/*
 ```
 
-The panel assets are embedded into the binary at build time.
+The panel assets are embedded into the binary at build time. Use `/admin` for the administrator console (`/admin/connect` to connect) and `/app` for the user workspace (`/app/login` to sign in). The legacy `/management.html` and `/user.html` routes remain available as compatibility aliases, but new links and deployment instructions should use `/admin` and `/app`.
 
 Home examples usually use port `8327`. An explicit `-addr` takes precedence; otherwise Home uses `node.port` from `cluster.yaml`. The runtime config `server.port` is distributed to CPA nodes and does not configure the Home listener.
 
@@ -636,7 +638,7 @@ Example response:
 
 ### GET `/server/latest-version`
 
-Fetches the latest CLIProxyAPIHome release from GitHub. If `requests.proxy-url` is configured, the request uses that proxy.
+Fetches the latest AI48Home release from GitHub (`sofyan48/AI48Home`). If `requests.proxy-url` is configured, the request uses that proxy.
 
 Input: none.
 
@@ -3010,7 +3012,7 @@ xAI queries three fixed Grok CLI endpoints concurrently within one probe timeout
 Claude plan metadata comes from `/api/oauth/profile`; failed or unrecognized profile reads retain the last known plan. Claude reset counts are read separately with `GET /api/oauth/usage?cedar_ember=1&skip_spend=1`. For an eligible account with a valid grant list, `reset_credits.available_count` sums the remaining resets in grants that have started, have not expired, and are not paused. This is a remaining count, not a guarantee that a reset can be redeemed at the current usage level. The `credits` array is empty because Claude grants may cover multiple resets rather than individual Codex-style credits. Missing or ineligible grant data produces `reset_credits: null`; a failed or malformed reset read clears the prior reset observation and marks collection `partial`, while retaining successfully collected windows and plan data. Home only observes this information and never consumes a reset grant.
 
 
-Collectors read DB credentials directly and never accept a URL from HMC. Credential-bearing quota requests only follow redirects within the original scheme, host, and effective port; cross-origin redirects and HTTPS downgrades are rejected before forwarding the request. Before probing, they resolve the latest DB credential and use its currently stored access token without invoking OAuth refresh; credential refresh remains owned by the independent runtime refresh subsystem. They use the current hot-reloaded global proxy unless the credential has its own proxy. They use a 20-second request timeout, a per-provider concurrency limit of 3 on PostgreSQL and a global limit of 1 on SQLite, a per-credential DB lease, and a five-minute exponential retry backoff with per-credential jitter capped near one hour. `Retry-After` can extend the next attempt. Disabled credentials and credentials blocked by an OAuth refresh failure are not actively probed; model execution cooldowns do not prevent quota collection, and quota collection's own retry backoff (`next_probe_at`) defers scheduled scans without blocking on-demand force recollection. Persisted unavailable/error state from an expired cooldown or cleared refresh block no longer blocks recovery. Successful snapshots are fresh for 30 minutes. Failures preserve last-known windows and store only structured, redacted error metadata.
+Collectors read DB credentials directly and never accept a URL from the management panel. Credential-bearing quota requests only follow redirects within the original scheme, host, and effective port; cross-origin redirects and HTTPS downgrades are rejected before forwarding the request. Before probing, they resolve the latest DB credential and use its currently stored access token without invoking OAuth refresh; credential refresh remains owned by the independent runtime refresh subsystem. They use the current hot-reloaded global proxy unless the credential has its own proxy. They use a 20-second request timeout, a per-provider concurrency limit of 3 on PostgreSQL and a global limit of 1 on SQLite, a per-credential DB lease, and a five-minute exponential retry backoff with per-credential jitter capped near one hour. `Retry-After` can extend the next attempt. Disabled credentials and credentials blocked by an OAuth refresh failure are not actively probed; model execution cooldowns do not prevent quota collection, and quota collection's own retry backoff (`next_probe_at`) defers scheduled scans without blocking on-demand force recollection. Persisted unavailable/error state from an expired cooldown or cleared refresh block no longer blocks recovery. Successful snapshots are fresh for 30 minutes. Failures preserve last-known windows and store only structured, redacted error metadata.
 
 
 Credential fields:
@@ -4230,7 +4232,7 @@ The following paths use the v8 config layout. `/config` and `/config.yaml` suppo
 | `server.trusted-proxies` | array of string | Explicit reverse-proxy IP/CIDR allowlist used for forwarded client addresses. Empty trusts none; trust-all networks are rejected; restart after changes. |
 | `management.allow-remote` | boolean | Allows non-localhost Management API requests when true. |
 | `management.secret-key` | string | Management key. In local config mode, plaintext is hashed at startup. |
-| `management.disable-control-panel` | boolean | Disables the embedded panel routes: `/`, `/index.html`, `/management.html`, `/user.html`, and `/assets/*`. |
+| `management.disable-control-panel` | boolean | Disables the embedded panel routes: `/`, `/index.html`, `/admin`, `/admin/*`, `/app`, `/app/*`, `/assets/*`, and the legacy HTML aliases. |
 | `management.disable-auto-update-panel` | boolean | Legacy compatibility flag; embedded panel assets are not updated at runtime. |
 | `management.panel-github-repository` | string | Legacy compatibility field for the embedded panel source repository. |
 | `user-panel.cpa-public-url` | string | Optional absolute HTTP/HTTPS public CPA URL without credentials; surrounding whitespace is trimmed for display. DB-backed, Home-only display metadata exposed as `server_info.cpa_public_url` by `GET /user/capabilities` when nonempty. Never controls listeners, clustering, or downstream CPA runtime config. Set via `PUT /v8/management/config/user-panel/cpa-public-url` with a JSON string, or the root `user-panel` object; empty clears display metadata. |

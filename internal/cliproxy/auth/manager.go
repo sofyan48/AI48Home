@@ -99,7 +99,7 @@ func (l *authUpdateLocks) lock(authID string) func() {
 	}
 }
 
-// Manager orchestrates auth lifecycle, selection, and persistence for CLIProxyAPIHome.
+// Manager orchestrates auth lifecycle, selection, and persistence for AI48Home.
 //
 // This is intentionally narrower than CPA's full execution manager: it only supports
 // registering/updating auths, scheduling selection (Dispatch), and background refresh.

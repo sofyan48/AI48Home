@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	defaultTOTPIssuer    = "CPAHome"
+	defaultTOTPIssuer    = "AI48Home"
 	defaultTOTPPeriod    = 30
 	defaultTOTPDigits    = 6
 	defaultTOTPAlgorithm = "SHA1"

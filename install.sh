@@ -126,7 +126,7 @@ wait_for_home() {
   fi
 
   compose logs --tail=150 home || true
-  fail "CLIProxyAPIHome tidak menjadi ready."
+  fail "AI48Home tidak menjadi ready."
 }
 
 generate_home_jwt() {
@@ -281,8 +281,9 @@ services:
     restart: unless-stopped
 
   home:
-    image: meongbego/cliphome
-    container_name: cliproxy-home
+    image: \${HOME_IMAGE:-ghcr.io/sofyan48/ai48home:latest}
+    pull_policy: always
+    container_name: ai48home
     environment:
       HOME_USER_EMAIL_SMTP_PASSWORD: ""
     depends_on:
@@ -291,10 +292,10 @@ services:
     ports:
       - "8327:8327"
     volumes:
-      - ./cluster.yaml:/CLIProxyAPIHome/cluster.yaml:ro
-      - ./home-data:/CLIProxyAPIHome/data
-      - ./home-logs:/CLIProxyAPIHome/logs
-      - ./home-plugins:/CLIProxyAPIHome/plugins
+      - ./cluster.yaml:/AI48Home/cluster.yaml:ro
+      - ./home-data:/AI48Home/data
+      - ./home-logs:/AI48Home/logs
+      - ./home-plugins:/AI48Home/plugins
     networks:
       cliproxy:
         aliases:
@@ -418,8 +419,8 @@ ensure_home_initialized() {
   compose stop home >/dev/null 2>&1 || true
 
   compose run --rm --no-deps \
-    -v "$BASE_DIR/config.yaml:/CLIProxyAPIHome/config.yaml:ro" \
-    home ./CLIProxyAPIHome -import
+    -v "$BASE_DIR/config.yaml:/AI48Home/config.yaml:ro" \
+    home ./AI48Home -import
 
   touch "$BOOTSTRAP_MARKER"
   compose up -d home
@@ -467,7 +468,7 @@ start_cluster() {
   compose up -d postgres
   wait_for_postgres
 
-  log "Menyalakan CLIProxyAPIHome"
+  log "Menyalakan AI48Home"
   compose up -d home
   wait_for_home "$management_key"
 
@@ -509,6 +510,39 @@ restart_cluster() {
 
   log "Worker akan reconnect setelah ${WORKER_START_DELAY_SECONDS}-$((WORKER_START_DELAY_SECONDS + 4)) detik"
   compose ps
+}
+
+upgrade_home() {
+  local management_key image
+
+  require_existing_installation
+  management_key="$(read_env_value MANAGEMENT_KEY)"
+
+  # Optional argument switches the tag, e.g. "upgrade v1.2.0" or "upgrade edge".
+  if [[ -n "$ACTION_ARG" ]]; then
+    image="$(read_env_value HOME_IMAGE)"
+    image="${image:-ghcr.io/sofyan48/ai48home:latest}"
+    set_env_value HOME_IMAGE "${image%:*}:${ACTION_ARG}"
+  fi
+
+  # Migrate installs created before the AI48Home rename (image name and container paths).
+  image="$(read_env_value HOME_IMAGE)"
+  if [[ "$image" == *"/cliproxyapihome:"* ]]; then
+    set_env_value HOME_IMAGE "${image/\/cliproxyapihome:/\/ai48home:}"
+  fi
+  if grep -q '/CLIProxyAPIHome/' "$COMPOSE_FILE"; then
+    log "Memperbarui path container lama /CLIProxyAPIHome ke /AI48Home"
+    sed -i 's#:/CLIProxyAPIHome/#:/AI48Home/#g; s#container_name: cliproxy-home#container_name: ai48home#' "$COMPOSE_FILE"
+  fi
+
+  log "Menarik image Home terbaru: $(read_env_value HOME_IMAGE)"
+  compose pull home
+
+  log "Mengganti container Home (worker tetap berjalan dan reconnect otomatis)"
+  compose up -d --no-deps home
+  wait_for_home "$management_key"
+
+  compose ps home
 }
 
 repair_worker() {
@@ -562,11 +596,15 @@ POSTGRES_DB=cliproxy_home
 POSTGRES_PASSWORD=$(random_hex 32)
 MANAGEMENT_KEY=$(random_hex 32)
 GATEWAY_API_KEY=sk-gateway-$(random_hex 24)
+HOME_IMAGE=${HOME_IMAGE:-ghcr.io/sofyan48/ai48home:latest}
 HOME_JWT_1=
 HOME_JWT_2=
 HOME_JWT_3=
 EOF_ENV
   fi
+
+  # Older installations predate HOME_IMAGE; pin them to the GHCR image.
+  grep -qE '^HOME_IMAGE=' "$ENV_FILE" || set_env_value HOME_IMAGE "${HOME_IMAGE:-ghcr.io/sofyan48/ai48home:latest}"
 
   postgres_password="$(read_env_value POSTGRES_PASSWORD)"
   management_key="$(read_env_value MANAGEMENT_KEY)"
@@ -595,7 +633,7 @@ EOF_ENV
   compose up -d postgres
   wait_for_postgres
 
-  log "Menyiapkan CLIProxyAPIHome"
+  log "Menyiapkan AI48Home"
   ensure_home_initialized "$management_key"
 
   ensure_worker_jwts "$management_key"
@@ -620,6 +658,8 @@ Gateway API key : ${gateway_api_key}
 Directory       : ${BASE_DIR}
 
 Perintah operasional:
+  sudo bash $0 upgrade          # tarik image GHCR terbaru
+  sudo bash $0 upgrade v1.2.0   # pindah ke tag tertentu
   sudo bash $0 restart
   sudo bash $0 stop
   sudo bash $0 start
@@ -659,12 +699,15 @@ main() {
     status)
       show_status
       ;;
+    upgrade|update)
+      upgrade_home
+      ;;
     repair-worker)
       [[ -n "$ACTION_ARG" ]] || fail "Gunakan: $0 repair-worker <1|2|3>"
       repair_worker "$ACTION_ARG"
       ;;
     *)
-      fail "Action tidak dikenal: $ACTION. Gunakan deploy, restart, start, stop, status, atau repair-worker."
+      fail "Action tidak dikenal: $ACTION. Gunakan deploy, upgrade, restart, start, stop, status, atau repair-worker."
       ;;
   esac
 }

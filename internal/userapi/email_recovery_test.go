@@ -432,7 +432,7 @@ func newUserEmailTestHandler(t *testing.T, mutate func(*appconfig.Config)) (*Han
 			Enabled:              true,
 			PublicUserURL:        "http://127.0.0.1/user.html",
 			FromAddress:          "no-reply@example.com",
-			FromName:             "CLIProxyAPIHome",
+			FromName:             "AI48Home",
 			VerificationTokenTTL: "24h",
 			ResetTokenTTL:        "30m",
 			Sender: appconfig.UserEmailSenderConfig{

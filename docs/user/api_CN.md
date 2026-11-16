@@ -1,6 +1,6 @@
-# CLIProxyAPIHome User API 文档
+# AI48Home User API 文档
 
-本文档描述 CLIProxyAPIHome 当前 DB-backed User API。User API 与 Management API 分离，不使用 Management API secret key。
+本文档描述 AI48Home 当前 DB-backed User API。User API 与 Management API 分离，不使用 Management API secret key。
 
 v8 升级将 [Management API](../management/api_CN.md) 更新为 `/v8/management`；User API 仍使用 `/user`，认证和资源路径保持不变。`/user/api-keys` 管理已登录用户的客户端访问密钥；上游 provider 分组由管理接口 `/config/api-keys` 管理，管理员访问密钥操作使用相对于管理基础路径的 `/access/api-keys`。
 
@@ -9,6 +9,8 @@ v8 升级将 [Management API](../management/api_CN.md) 更新为 `/v8/management
 ```text
 http://<host>:<port>/user
 ```
+
+浏览器用户工作区入口为 `/app`，登录页面为 `/app/login`。这些 UI 路由与 `/user` API 基础路径不同。
 
 Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 使用 `cluster.yaml` 中的 `node.port`。v8 runtime config 的 `server.port` 仅下发给 CPA 节点，不参与 Home 监听端口配置。
 
@@ -25,9 +27,9 @@ Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 
 ```yaml
 user-email:
   enabled: true
-  public-user-url: "https://home.example.com/user.html"
+  public-user-url: "https://home.example.com/app"
   from-address: "no-reply@example.com"
-  from-name: "CLIProxyAPIHome"
+  from-name: "AI48Home"
   sender:
     type: "smtp"
     smtp:
@@ -593,8 +595,8 @@ Query 参数：
 ```json
 {
   "secret": "BASE32SECRET",
-  "otp_auth_url": "otpauth://totp/CLIProxyAPIHome:alice?...",
-  "issuer": "CLIProxyAPIHome",
+  "otp_auth_url": "otpauth://totp/AI48Home:alice?...",
+  "issuer": "AI48Home",
   "period": 30,
   "digits": 6,
   "algorithm": "SHA1",
@@ -610,7 +612,7 @@ Query 参数：
 
 ```json
 {
-  "issuer": "CLIProxyAPIHome",
+  "issuer": "AI48Home",
   "regenerate": true
 }
 ```
@@ -642,7 +644,7 @@ Authorization: Bearer user.jwt.token
 | --- | --- | --- | --- |
 | `secret` | string | yes | 来自 `/totp` 的 Base32 TOTP secret。 |
 | `code` | string | yes | 当前 TOTP code。Aliases: `totp_code`, `totp-code`, `totp`。 |
-| `issuer` | string | no | 存入 TOTP metadata 的 issuer。默认为 `CLIProxyAPIHome`。 |
+| `issuer` | string | no | 存入 TOTP metadata 的 issuer。默认为 `AI48Home`。 |
 
 响应：同 `POST/PATCH /password`。
 
