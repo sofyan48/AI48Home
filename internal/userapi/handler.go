@@ -121,6 +121,12 @@ func Register(group *gin.RouterGroup, handler *Handler) {
 	group.GET("/period-limits", handler.CurrentUserPeriodLimits)
 	group.POST("/period-limits/reset", handler.ResetCurrentUserPeriodLimits)
 
+	group.GET("/chat/conversations", handler.ListChatConversations)
+	group.DELETE("/chat/conversations", handler.DeleteAllChatConversations)
+	group.GET("/chat/conversations/:id", handler.GetChatConversation)
+	group.PUT("/chat/conversations/:id", handler.SaveChatConversation)
+	group.DELETE("/chat/conversations/:id", handler.DeleteChatConversation)
+
 	group.POST("/password", handler.ChangePassword)
 	group.PATCH("/password", handler.ChangePassword)
 	group.POST("/password/forgot", handler.ForgotPassword)

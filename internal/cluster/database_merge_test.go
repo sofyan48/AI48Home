@@ -136,7 +136,7 @@ func TestMergedSnapshotHistoriesRoundTrip(t *testing.T) {
 				}
 				// Upstream v19 has no local counterpart.
 				upstreamHistory := upstream || version == 19
-				merged := version == 18 || version == currentDatabaseVersion
+				merged := version == 18 || version >= 20
 				path := filepath.Join(t.TempDir(), "snapshot.zip")
 				if _, errExport := exportDatabaseSnapshotModels(ctx, source, path, version, models); errExport != nil {
 					t.Fatal(errExport)

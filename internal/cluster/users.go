@@ -364,7 +364,13 @@ func (r *Repository) DeleteUser(ctx context.Context, id uint) error {
 	if errFirst := db.WithContext(ctx).Where("id = ?", id).First(&record).Error; errFirst != nil {
 		return errFirst
 	}
-	return db.WithContext(ctx).Delete(&record).Error
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Playground conversations are private user content and leave with the account.
+		if errChats := tx.Where("user_id = ?", id).Delete(&UserChatConversationRecord{}).Error; errChats != nil {
+			return errChats
+		}
+		return tx.Delete(&record).Error
+	})
 }
 
 // ParseUserRecordID parses a positive unsigned user record ID.
