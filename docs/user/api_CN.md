@@ -183,6 +183,11 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/billing/charges` |
 | `GET` | `/billing/balance-records` |
 | `POST` | `/billing/recharge` |
+| `GET` | `/chat/conversations` |
+| `DELETE` | `/chat/conversations` |
+| `GET` | `/chat/conversations/:id` |
+| `PUT` | `/chat/conversations/:id` |
+| `DELETE` | `/chat/conversations/:id` |
 | `GET` | `/api-keys` |
 | `POST` | `/api-keys` |
 | `POST` | `/api-key` |
@@ -220,7 +225,8 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
     "email_verification": true,
     "password_recovery": true,
     "model_catalog": true,
-        "request_logs": true
+    "request_logs": true,
+    "chat_history": true
   },
   "server_info": {
     "home_version": "v1.2.3",
@@ -1031,6 +1037,40 @@ Authorization: Bearer user.jwt.token
 归属只依据关联 usage 的历史 `billing_charge.user_id` 快照，该快照在 usage 入库并记录计费归属时捕获。列表、计数和所有 summary 聚合均要求快照匹配当前认证用户 ID。**绝不回退到 API key 当前所有者**，不信任 payload 中的用户身份，也不按当前绑定补填历史归属。重新分配或删除 key 不会转移历史日志；删除用户会使其无法访问，日志不会转移给其他用户。缺失、null 或未知归属的记录全部排除，包括没有快照的旧记录、失败请求和非计费记录。因此本接口是 fail-closed 的已归属 usage 摘要，而非完整原始请求日志归档。
 
 不会返回 provider、HTTP 状态码、客户端/key 标识、secret、路由、计费数据、原始 payload、错误详情或下载 URL。本接口不授予管理端列表、详情或文件下载权限。
+
+## Playground 对话历史
+
+用户面板的对话试验场通过 `/user/chat/conversations` 按用户保存对话。所有 route 均需要当前用户的 bearer session（缺失返回 `401`，待审批用户返回 `403 approval_pending`）。归属仅来自该 session：其他用户的对话返回 `404 not_found`，任何 route 都不接受 `user_id`。`GET /user/capabilities` 返回 `chat_history: true`；旧版本不包含该字段，客户端应回退到浏览器本地存储。
+
+Home 只保存客户端发送的对话记录，这些 route 不会调用模型，Management API 也没有读取对话的 route。删除用户时会同时删除其对话。
+
+对话 ID 由客户端生成：1–64 个字符，只能包含 `A-Z a-z 0-9 - _`，否则返回 `400 invalid_chat_id`。
+
+限制：
+
+- 每个用户最多保留 100 个对话，保存时会清理超出上限的最久未更新对话。
+- 单个对话最多 500 条消息，单次保存请求体最大 4 MiB（超出返回 `413 request_too_large`）。
+- `title` 截断为 200 个字符；为空时取第一条用户消息的前 60 个字符。
+
+### GET `/chat/conversations`
+
+按最近更新时间倒序列出对话，不含消息。响应为 `{"items": [{"id", "title", "model", "message_count", "created_at", "updated_at"}], "limit": 100}`。
+
+### GET `/chat/conversations/:id`
+
+以 `{"conversation": {...}}` 返回包含 `messages` 的单个对话；未知 ID 返回 `404 not_found`。
+
+### PUT `/chat/conversations/:id`
+
+创建对话，或替换其 `title`、`model` 和 `messages`。替换时保留 `created_at`，`updated_at` 设为服务器时间。每条消息包含 `id`、`role`（`user` 或 `assistant`）、`content`，以及可选的 `reasoning`、`model`、`stopped`、`error`、`usage`、`latency_ms`。`messages` 为空或 `role` 无效时返回 `400 invalid_chat`；未知字段会被忽略。响应为保存后的 `{"conversation": {...}}`。
+
+### DELETE `/chat/conversations/:id`
+
+删除单个对话并返回 `{"status": "ok"}`；未知 ID 返回 `404 not_found`。
+
+### DELETE `/chat/conversations`
+
+删除当前用户的所有对话并返回 `{"status": "ok"}`。
 
 ## Billing
 

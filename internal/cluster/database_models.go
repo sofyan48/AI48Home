@@ -11,7 +11,8 @@ import (
 // portable snapshot format. Increment it for every required startup migration
 // or snapshot format change, and retain mappings for prior snapshot formats.
 // Local v18 and upstream v18/v19 were assigned independently; v20 merges both.
-const currentDatabaseVersion = 20
+// v21 adds user playground chat conversations.
+const currentDatabaseVersion = 21
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -655,7 +656,10 @@ var databaseSnapshotLocalV18Models = databaseSnapshotLocalV18ModelRegistry()
 // dedupe keys without the local user fields and tables.
 var databaseSnapshotUpstreamV18Models = databaseSnapshotUpstreamV18ModelRegistry()
 
-// homeDatabaseModels combines both histories in the unambiguous v20 format.
+// databaseSnapshotV20Models freezes the merged v20 format before chat conversations.
+var databaseSnapshotV20Models = withCurrentUsageModel(databaseSnapshotLocalV18Models)
+
+// homeDatabaseModels is the current format.
 var homeDatabaseModels = currentDatabaseModels()
 
 var databaseMigrationOnlyModels = []databaseModel{
@@ -785,7 +789,9 @@ func databaseSnapshotUpstreamV18ModelRegistry() []databaseModel {
 }
 
 func currentDatabaseModels() []databaseModel {
-	return withCurrentUsageModel(databaseSnapshotLocalV18Models)
+	return append(append([]databaseModel(nil), databaseSnapshotV20Models...),
+		newDatabaseModel[UserChatConversationRecord]("user_chat_conversation", []string{"user_id", "id"}, false, true),
+	)
 }
 
 func withCurrentUsageModel(source []databaseModel) []databaseModel {
@@ -835,6 +841,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 	case 19:
 		// Upstream v19 only adds expiring Guardian selection metadata.
 		return databaseSnapshotUpstreamV18Models, true
+	case 20:
+		return databaseSnapshotV20Models, true
 	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:
