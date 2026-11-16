@@ -10,7 +10,8 @@ import (
 // currentDatabaseVersion is shared by the live schema migration gate and the
 // portable snapshot format. Increment it for every required startup migration
 // or snapshot format change, and retain mappings for prior snapshot formats.
-const currentDatabaseVersion = 18
+// Local v18 and upstream v18/v19 were assigned independently; v20 merges both.
+const currentDatabaseVersion = 20
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -222,6 +223,73 @@ type databaseSnapshotV5UsageRecord struct {
 }
 
 func (databaseSnapshotV5UsageRecord) TableName() string {
+	return "usage"
+}
+
+// databaseSnapshotV17UsageRecord freezes the usage shape used by snapshot
+// formats v6 through v17, before the dedupe_key column was added.
+type databaseSnapshotV17UsageRecord struct {
+	ID                         uint      `gorm:"column:id;primaryKey;autoIncrement;index:idx_usage_time_order,priority:2"`
+	Timestamp                  time.Time `gorm:"column:timestamp;not null;index:idx_usage_timestamp;index:idx_usage_time_order,priority:1,sort:desc;index:idx_usage_source_time,priority:2,sort:desc;index:idx_usage_auth_time,priority:2,sort:desc;index:idx_usage_failed_time,priority:2,sort:desc;index:idx_usage_failed_status_time,priority:3,sort:desc;index:idx_usage_provider_model_time,priority:3,sort:desc;index:idx_usage_provider_time,priority:2,sort:desc;index:idx_usage_endpoint_time,priority:2,sort:desc;index:idx_usage_home_time,priority:2,sort:desc;index:idx_usage_auth_type_time,priority:2,sort:desc;index:idx_usage_session_time,priority:2,sort:desc;index:idx_usage_parent_session_time,priority:2,sort:desc;index:idx_usage_root_session_time,priority:2,sort:desc"`
+	LatencyMS                  int64     `gorm:"column:latency_ms;not null;default:0"`
+	TTFTMS                     int64     `gorm:"column:ttft_ms;not null;default:0"`
+	Source                     string    `gorm:"column:source;index:idx_usage_source;index:idx_usage_source_time,priority:1"`
+	AuthIndex                  string    `gorm:"column:auth_index;index:idx_usage_auth_index;index:idx_usage_auth_time,priority:1"`
+	QuotaCredentialID          string    `gorm:"column:quota_credential_id;not null;default:''"`
+	QuotaIdentityVersion       int64     `gorm:"column:quota_identity_version;not null;default:0"`
+	QuotaIdentityKey           string    `gorm:"column:quota_identity_key;not null;default:'';size:128"`
+	InputTokens                int64     `gorm:"column:input_tokens;not null;default:0"`
+	OutputTokens               int64     `gorm:"column:output_tokens;not null;default:0"`
+	ReasoningTokens            int64     `gorm:"column:reasoning_tokens;not null;default:0"`
+	CachedTokens               int64     `gorm:"column:cached_tokens;not null;default:0"`
+	CacheReadTokens            int64     `gorm:"column:cache_read_tokens;not null;default:0"`
+	CacheReadTokensPresent     bool      `gorm:"column:cache_read_tokens_present;not null;default:false"`
+	CacheCreationTokens        int64     `gorm:"column:cache_creation_tokens;not null;default:0"`
+	TotalTokens                int64     `gorm:"column:total_tokens;not null;default:0"`
+	TokenAccountingVersion     int       `gorm:"column:token_accounting_version;not null;default:0;index:idx_usage_token_accounting_version"`
+	TokenAccountingQuality     string    `gorm:"column:token_accounting_quality;not null;default:'unclassified'"`
+	AccountingTotalTokens      int64     `gorm:"column:accounting_total_tokens;not null;default:0"`
+	AccountingInputTokens      int64     `gorm:"column:accounting_input_tokens;not null;default:0"`
+	UncachedInputTokens        int64     `gorm:"column:uncached_input_tokens;not null;default:0"`
+	AccountingCacheReadTokens  int64     `gorm:"column:accounting_cache_read_tokens;not null;default:0"`
+	AccountingCacheWriteTokens int64     `gorm:"column:accounting_cache_write_tokens;not null;default:0"`
+	AccountingOutputTokens     int64     `gorm:"column:accounting_output_tokens;not null;default:0"`
+	NonReasoningOutputTokens   int64     `gorm:"column:non_reasoning_output_tokens;not null;default:0"`
+	AccountingReasoningTokens  int64     `gorm:"column:accounting_reasoning_tokens;not null;default:0"`
+	UnclassifiedTokens         int64     `gorm:"column:unclassified_tokens;not null;default:0"`
+	Failed                     bool      `gorm:"column:failed;not null;default:false;index:idx_usage_failed;index:idx_usage_failed_time,priority:1;index:idx_usage_failed_status_time,priority:1"`
+	FailStatusCode             int       `gorm:"column:fail_status_code;not null;default:0;index:idx_usage_failed_status_time,priority:2"`
+	FailBody                   string    `gorm:"column:fail_body;type:text"`
+	Provider                   string    `gorm:"column:provider;index:idx_usage_provider_model,priority:1;index:idx_usage_provider_model_time,priority:1;index:idx_usage_provider_time,priority:1"`
+	ExecutorType               string    `gorm:"column:executor_type"`
+	Model                      string    `gorm:"column:model;index:idx_usage_provider_model,priority:2;index:idx_usage_provider_model_time,priority:2"`
+	Alias                      string    `gorm:"column:alias"`
+	Effort                     string    `gorm:"column:effort"`
+	ServiceTier                string    `gorm:"column:service_tier"`
+	ResponseServiceTier        string    `gorm:"column:response_service_tier"`
+	Endpoint                   string    `gorm:"column:endpoint;index:idx_usage_endpoint;index:idx_usage_endpoint_time,priority:1"`
+	AuthType                   string    `gorm:"column:auth_type;index:idx_usage_auth_type_time,priority:1"`
+	APIKey                     string    `gorm:"column:api_key;index:idx_usage_api_key"`
+	RequestID                  string    `gorm:"column:request_id;index:idx_usage_request_id"`
+	SessionID                  string    `gorm:"column:session_id;index:idx_usage_session_time,priority:1"`
+	ParentSessionID            string    `gorm:"column:parent_session_id;index:idx_usage_parent_session_time,priority:1"`
+	RootSessionID              string    `gorm:"column:root_session_id;index:idx_usage_root_session_time,priority:1"`
+	UpstreamRequestID          string    `gorm:"column:upstream_request_id;index:idx_usage_upstream_request_id"`
+	EventType                  string    `gorm:"column:event_type;index:idx_usage_event_type;index:idx_usage_event_time,priority:1"`
+	UpstreamStatusCode         int       `gorm:"column:upstream_status_code;not null;default:0;index:idx_usage_upstream_status_code"`
+	HomeIP                     string    `gorm:"column:home_ip;index:idx_usage_home_ip;index:idx_usage_home_time,priority:1;index:idx_usage_home_port_time,priority:1"`
+	HomePort                   int       `gorm:"column:home_port;not null;default:0;index:idx_usage_home_port_time,priority:2"`
+	CPANodeID                  string    `gorm:"column:cpa_node_id;index:idx_usage_cpa_node_id;index:idx_usage_cpa_node_time,priority:1"`
+	CPAIP                      string    `gorm:"column:cpa_ip;index:idx_usage_cpa_ip"`
+	CPAPort                    int       `gorm:"column:cpa_port;not null;default:0"`
+	CPALabel                   string    `gorm:"column:cpa_label;index:idx_usage_cpa_label"`
+	TokensJSON                 JSONB     `gorm:"column:tokens"`
+	FailJSON                   JSONB     `gorm:"column:fail"`
+	PayloadJSON                JSONB     `gorm:"column:payload;not null"`
+	CreatedAt                  time.Time `gorm:"column:created_at;not null"`
+}
+
+func (databaseSnapshotV17UsageRecord) TableName() string {
 	return "usage"
 }
 
@@ -576,11 +644,18 @@ func databaseSnapshotV8ModelRegistry() []databaseModel {
 	return models
 }
 
-var databaseSnapshotV17Models = append(append([]databaseModel(nil), databaseSnapshotV16Models...),
-	newDatabaseModel[CodexRefreshRecord]("codex_refresh_journal", []string{"grant_sha256"}, false, true),
-)
+// databaseSnapshotV17Models freezes the format before usage dedupe keys.
+var databaseSnapshotV17Models = databaseSnapshotV17ModelRegistry()
 
-// homeDatabaseModels combines both histories in the unambiguous v18 format.
+// databaseSnapshotLocalV18Models freezes the local v18 format: both user
+// histories combined, before upstream usage dedupe keys.
+var databaseSnapshotLocalV18Models = databaseSnapshotLocalV18ModelRegistry()
+
+// databaseSnapshotUpstreamV18Models freezes upstream v18/v19, which added usage
+// dedupe keys without the local user fields and tables.
+var databaseSnapshotUpstreamV18Models = databaseSnapshotUpstreamV18ModelRegistry()
+
+// homeDatabaseModels combines both histories in the unambiguous v20 format.
 var homeDatabaseModels = currentDatabaseModels()
 
 var databaseMigrationOnlyModels = []databaseModel{
@@ -654,7 +729,7 @@ func databaseSnapshotV6ModelRegistry() []databaseModel {
 	for index := range models {
 		switch models[index].name {
 		case "usage":
-			models[index] = newDatabaseModel[UsageRecord]("usage", []string{"id"}, true, true)
+			models[index] = newDatabaseModel[databaseSnapshotV17UsageRecord]("usage", []string{"id"}, true, true)
 		}
 	}
 	return models
@@ -686,7 +761,13 @@ func databaseSnapshotV16ModelRegistry() []databaseModel {
 	return models
 }
 
-func currentDatabaseModels() []databaseModel {
+func databaseSnapshotV17ModelRegistry() []databaseModel {
+	return append(append([]databaseModel(nil), databaseSnapshotV16Models...),
+		newDatabaseModel[CodexRefreshRecord]("codex_refresh_journal", []string{"grant_sha256"}, false, true),
+	)
+}
+
+func databaseSnapshotLocalV18ModelRegistry() []databaseModel {
 	models := append([]databaseModel(nil), databaseSnapshotV17Models...)
 	for index := range models {
 		if models[index].name == "user" {
@@ -697,6 +778,25 @@ func currentDatabaseModels() []databaseModel {
 		newDatabaseModel[CodexResetRedemptionRecord]("codex_reset_redemptions", []string{"credential_id", "request_key_hash"}, false, true),
 		newDatabaseModel[BillingRechargeRequestRecord]("billing_recharge_request", []string{"id"}, true, true),
 	)
+}
+
+func databaseSnapshotUpstreamV18ModelRegistry() []databaseModel {
+	return withCurrentUsageModel(databaseSnapshotV17Models)
+}
+
+func currentDatabaseModels() []databaseModel {
+	return withCurrentUsageModel(databaseSnapshotLocalV18Models)
+}
+
+func withCurrentUsageModel(source []databaseModel) []databaseModel {
+	models := append([]databaseModel(nil), source...)
+	for index := range models {
+		if models[index].name == "usage" {
+			models[index] = newDatabaseModel[UsageRecord]("usage", []string{"id"}, true, true)
+			break
+		}
+	}
+	return models
 }
 
 // databaseSnapshotModels defaults to the local history for colliding versions.
@@ -730,6 +830,11 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV16Models, true
 	case 17:
 		return databaseSnapshotV17Models, true
+	case 18:
+		return databaseSnapshotLocalV18Models, true
+	case 19:
+		// Upstream v19 only adds expiring Guardian selection metadata.
+		return databaseSnapshotUpstreamV18Models, true
 	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:

@@ -19,6 +19,8 @@ func TestMergedSchemaUpgradesBothHistories(t *testing.T) {
 	}{
 		{"local13", 13, databaseSnapshotV10Models, true},
 		{"upstream17", 17, databaseSnapshotV17Models, false},
+		{"local18", 18, databaseSnapshotLocalV18Models, true},
+		{"upstream19", 19, databaseSnapshotUpstreamV18Models, false},
 	} {
 		t.Run(history.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -47,7 +49,9 @@ func TestMergedSchemaUpgradesBothHistories(t *testing.T) {
 				t.Fatal(errCreate)
 			}
 			charge := map[string]any{"id": "old-charge", "usage_id": 1, "payload_hash": "old-hash", "amount": 3.0, "price_snapshot": "{}", "created_at": time.Now().UTC()}
-			if !history.local {
+			// Snapshot v15+ charge shapes always carry base amounts and multipliers.
+			billedCharge := !history.local || history.version >= 15
+			if billedCharge {
 				charge["base_amount"] = 4.0
 				charge["billing_multiplier"] = 0.75
 			}
@@ -57,7 +61,7 @@ func TestMergedSchemaUpgradesBothHistories(t *testing.T) {
 			// Exercise the same version coordinator used by PostgreSQL without needing a live server.
 			store := newFakeSchemaMigrationStore(schemaMigrationState{Version: history.version, Initialized: true})
 			result, errCoordinate := coordinateSchemaMigration(ctx, currentDatabaseVersion, time.Millisecond, time.Second, false, store.operations())
-			if errCoordinate != nil || !result.MigrationCommitted || result.CurrentState.Version != 18 {
+			if errCoordinate != nil || !result.MigrationCommitted || result.CurrentState.Version != currentDatabaseVersion {
 				t.Fatalf("version upgrade = %+v, %v", result, errCoordinate)
 			}
 			for attempt := 0; attempt < 2; attempt++ {
@@ -84,7 +88,7 @@ func TestMergedSchemaUpgradesBothHistories(t *testing.T) {
 				t.Fatal(errLoad)
 			}
 			wantBase, wantMultiplier := 3.0, 1.0
-			if !history.local {
+			if billedCharge {
 				wantBase, wantMultiplier = 4, 0.75
 			}
 			if migratedCharge.Amount != 3 || migratedCharge.BaseAmount != wantBase || migratedCharge.BillingMultiplier != wantMultiplier {
@@ -119,14 +123,20 @@ func TestMergedSnapshotHistoriesRoundTrip(t *testing.T) {
 	}
 	for version := 6; version <= currentDatabaseVersion; version++ {
 		for _, upstream := range []bool{false, true} {
-			if upstream && (version < 7 || version > 13) {
+			collision := version >= 7 && version <= 13 || version == 18
+			if upstream && !collision {
 				continue
 			}
 			t.Run(fmt.Sprintf("v%d/upstream=%t", version, upstream), func(t *testing.T) {
 				models, _ := databaseSnapshotModels(version)
-				if upstream {
+				if upstream && version == 18 {
+					models = databaseSnapshotUpstreamV18Models
+				} else if upstream {
 					models = databaseSnapshotV6Models
 				}
+				// Upstream v19 has no local counterpart.
+				upstreamHistory := upstream || version == 19
+				merged := version == 18 || version == currentDatabaseVersion
 				path := filepath.Join(t.TempDir(), "snapshot.zip")
 				if _, errExport := exportDatabaseSnapshotModels(ctx, source, path, version, models); errExport != nil {
 					t.Fatal(errExport)
@@ -148,15 +158,15 @@ func TestMergedSnapshotHistoriesRoundTrip(t *testing.T) {
 				if errLoad := target.First(&restored, user.ID).Error; errLoad != nil {
 					t.Fatal(errLoad)
 				}
-				local := !upstream && version >= 8 && version <= 13 || version == currentDatabaseVersion
-				allowance := !upstream && version >= 10 && version <= 13 || version == currentDatabaseVersion
+				local := !upstreamHistory && (version >= 8 && version <= 13 || merged)
+				allowance := !upstreamHistory && (version >= 10 && version <= 13 || merged)
 				billing := version >= 15
 				for _, table := range []struct {
 					name    string
 					present bool
 				}{
-					{"codex_reset_redemptions", !upstream && version >= 7 && version <= 13 || version == currentDatabaseVersion},
-					{"billing_recharge_request", !upstream && version >= 9 && version <= 13 || version == currentDatabaseVersion},
+					{"codex_reset_redemptions", !upstreamHistory && (version >= 7 && version <= 13 || merged)},
+					{"billing_recharge_request", !upstreamHistory && (version >= 9 && version <= 13 || merged)},
 					{"codex_refresh_journal", version >= 17},
 				} {
 					var count int64
@@ -186,7 +196,7 @@ func TestMergedSnapshotHistoriesRoundTrip(t *testing.T) {
 }
 
 func TestMergedSnapshotRejectsMislabeledHistory(t *testing.T) {
-	for version := 7; version <= 13; version++ {
+	for _, version := range []int{7, 8, 9, 10, 11, 12, 13, 18} {
 		local, _ := databaseSnapshotModels(version)
 		manifest := DatabaseSnapshotManifest{FormatVersion: version}
 		for _, model := range local {
