@@ -1,0 +1,31 @@
+AI48Home has been deployed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+Services:
+  Home (Management HTTP, RESP/mTLS): {{ include "ai48home.fullname" . }}-home:8327
+  Workers (API traffic):             {{ include "ai48home.fullname" . }}-worker:8317
+
+{{- if or (not .Values.secrets.managementKey) (not .Values.secrets.gatewayApiKey) }}
+
+Generated keys:
+{{- if not .Values.secrets.managementKey }}
+  secrets.managementKey was not set, so a random management key was generated.
+{{- end }}
+{{- if not .Values.secrets.gatewayApiKey }}
+  secrets.gatewayApiKey was not set, so a random gateway API key was generated.
+{{- end }}
+  Generated keys are stored in the {{ include "ai48home.fullname" . }}-config Secret and reused on upgrades.
+{{- end }}
+
+Read the management key:
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "ai48home.fullname" . }}-config \
+    -o jsonpath='{.data.management-key}' | base64 -d; echo
+
+Read the gateway API key:
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "ai48home.fullname" . }}-config \
+    -o jsonpath='{.data.gateway-api-key}' | base64 -d; echo
+
+Open the admin console locally:
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "ai48home.fullname" . }}-home 8327:8327
+  Then browse to http://127.0.0.1:8327/admin/connect and sign in with the management key.
+
+These commands print secrets to your terminal. Do not paste their output into logs or chat.

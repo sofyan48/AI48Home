@@ -222,11 +222,11 @@ jobs:
             -ldflags="-s -w -X main.Version=${RELEASE_VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
             -o "$archive_dir/$binary_name" ./cmd/home/
 
-          cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
+          cp LICENSE README.md config.example.yaml "$archive_dir/"
           if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
             powershell -NoProfile -Command "Compress-Archive -Path '${archive_dir}/*' -DestinationPath 'dist/${archive_name}' -Force"
           else
-            tar -C "$archive_dir" -czf "dist/$archive_name" "$binary_name" LICENSE README.md README_CN.md config.example.yaml
+            tar -C "$archive_dir" -czf "dist/$archive_name" "$binary_name" LICENSE README.md config.example.yaml
           fi
       - uses: actions/upload-artifact@v4
         with:
@@ -339,8 +339,8 @@ jobs:
               fi
             '
 
-          cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
-          tar -C "$archive_dir" -czf "dist/$archive_name" AI48Home LICENSE README.md README_CN.md config.example.yaml
+          cp LICENSE README.md config.example.yaml "$archive_dir/"
+          tar -C "$archive_dir" -czf "dist/$archive_name" AI48Home LICENSE README.md config.example.yaml
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -437,8 +437,8 @@ jobs:
             exit 1
           fi
 
-          cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
-          tar -C "$archive_dir" -czf "dist/$archive_name" AI48Home LICENSE README.md README_CN.md config.example.yaml
+          cp LICENSE README.md config.example.yaml "$archive_dir/"
+          tar -C "$archive_dir" -czf "dist/$archive_name" AI48Home LICENSE README.md config.example.yaml
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -573,8 +573,8 @@ jobs:
 
           echo "Packaging ${archive_name}"
           cp "dist/${TARGET}/bin/AI48Home" "$archive_dir/AI48Home"
-          cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
-          tar -C "$archive_dir" -czf "dist/$archive_name" AI48Home LICENSE README.md README_CN.md config.example.yaml
+          cp LICENSE README.md config.example.yaml "$archive_dir/"
+          tar -C "$archive_dir" -czf "dist/$archive_name" AI48Home LICENSE README.md config.example.yaml
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -595,13 +595,92 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 
+  # Packages helm/ai48home for v* tags and publishes it to
+  #   oci://ghcr.io/<owner>/charts/ai48home:<version> and :latest
+  # plus the chart archive as a GitHub release asset.
+  helm-chart:
+    name: publish Helm chart
+    needs: prepare-release
+    if: ${{ startsWith(inputs.tag || github.ref_name, 'v') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - uses: oras-project/setup-oras@v1
+      - name: Resolve chart metadata
+        run: |
+          set -euo pipefail
+          chart_version="${RELEASE_TAG#v}"
+          if ! [[ "$chart_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            printf 'Release tag %s is not a semantic version\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+          {
+            echo "CHART_VERSION=${chart_version}"
+            echo "CHART_REGISTRY=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
+            echo "HOME_IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}"
+          } >> "$GITHUB_ENV"
+      - name: Pin Home image to the release
+        run: |
+          set -euo pipefail
+          yq -i '.home.image.repository = strenv(HOME_IMAGE) | .home.image.tag = strenv(RELEASE_TAG)' helm/ai48home/values.yaml
+          yq '.home.image' helm/ai48home/values.yaml
+      - name: Lint and render chart
+        run: |
+          set -euo pipefail
+          # Keys are left unset to exercise the generated-key path.
+          check_values=(
+            --set postgresql.auth.username=ai48home
+            --set postgresql.auth.database=ai48home
+            --set postgresql.auth.password=lint-password
+            --set postgresql.external.host=postgres.example.com
+          )
+          helm lint helm/ai48home --strict "${check_values[@]}"
+          helm template ai48home helm/ai48home "${check_values[@]}" > /dev/null
+          helm template ai48home helm/ai48home "${check_values[@]}" --set postgresql.enabled=true > /dev/null
+      - name: Package chart
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          helm package helm/ai48home --destination dist \
+            --version "$CHART_VERSION" --app-version "$RELEASE_TAG"
+          cp "dist/ai48home-${CHART_VERSION}.tgz" dist/ai48home-latest.tgz
+          ls -l dist
+      - name: Push chart to GHCR
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$REGISTRY_TOKEN" | helm registry login ghcr.io --username "$REGISTRY_USER" --password-stdin
+          printf '%s' "$REGISTRY_TOKEN" | oras login ghcr.io --username "$REGISTRY_USER" --password-stdin
+          helm push "dist/ai48home-${CHART_VERSION}.tgz" "oci://${CHART_REGISTRY}"
+          oras tag "${CHART_REGISTRY}/ai48home:${CHART_VERSION}" latest
+          helm show chart "oci://${CHART_REGISTRY}/ai48home" --version "$CHART_VERSION"
+      - name: Upload chart release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            "dist/ai48home-${CHART_VERSION}.tgz" dist/ai48home-latest.tgz --clobber
+
   publish-release:
     runs-on: ubuntu-latest
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     needs:
       - build-hosted
       - build-linux-glibc
       - build-linux-no-plugin
       - build-freebsd
+      - helm-chart
     steps:
       - uses: actions/download-artifact@v4
         with:

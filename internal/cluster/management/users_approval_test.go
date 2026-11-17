@@ -1,6 +1,8 @@
 package management
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -39,7 +41,11 @@ func TestUserManagementApprovalRuntimeRefresh(t *testing.T) {
 	if errValidate != nil || !valid {
 		t.Fatalf("generated key validation = %t, error = %v", valid, errValidate)
 	}
-	if len(handler.runtime.Config().APIKeys) != 0 {
+	runtimeConfig, errMarshal := json.Marshal(handler.runtime.Config())
+	if errMarshal != nil {
+		t.Fatal(errMarshal)
+	}
+	if bytes.Contains(runtimeConfig, []byte(keys[0].APIKey)) {
 		t.Fatal("runtime config exposed database API keys")
 	}
 }

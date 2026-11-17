@@ -1,0 +1,49 @@
+{{- if .Values.workers.autoscaling.enabled }}
+{{- $autoscaling := .Values.workers.autoscaling }}
+{{- if lt (int $autoscaling.minReplicas) 1 }}
+{{- fail "workers.autoscaling.minReplicas must be at least 1" }}
+{{- end }}
+{{- if lt (int $autoscaling.maxReplicas) (int $autoscaling.minReplicas) }}
+{{- fail "workers.autoscaling.maxReplicas must be >= minReplicas" }}
+{{- end }}
+{{- if le (int $autoscaling.targetCPUUtilizationPercentage) 0 }}
+{{- fail "workers.autoscaling.targetCPUUtilizationPercentage must be positive" }}
+{{- end }}
+{{- if not (dig "requests" "cpu" "" .Values.workers.resources) }}
+{{- fail "workers.resources.requests.cpu is required when autoscaling is enabled" }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "ai48home.fullname" . }}-workers
+  labels:
+    {{- include "ai48home.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: {{ include "ai48home.fullname" . }}-workers
+  minReplicas: {{ $autoscaling.minReplicas }}
+  maxReplicas: {{ $autoscaling.maxReplicas }}
+  metrics:
+    - type: ContainerResource
+      containerResource:
+        name: cpu
+        container: worker
+        target:
+          type: Utilization
+          averageUtilization: {{ $autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: {{ $autoscaling.scaleDownStabilizationSeconds }}
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+{{- end }}

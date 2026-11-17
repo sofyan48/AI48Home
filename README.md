@@ -57,6 +57,109 @@ Open `http://<host>:8327/admin` for the admin console and `http://<host>:8327/ap
 
 **Publishing images.** `.github/workflows/docker-image.yml` builds the panel from `sofyan48/AI48HomeUI`, embeds it, and pushes to GHCR using `GITHUB_TOKEN` (no extra secret). It runs on `v*` tags, on the `panel-updated` dispatch sent by AI48HomeUI, and manually from the Actions tab. After the first push, set the package visibility to **Public** under *Packages → ai48home → Package settings* so servers can pull without logging in.
 
+### Install on Kubernetes with Helm
+
+Every `v*` release publishes the Helm chart to GHCR, next to the Docker image:
+
+| Reference | Source |
+| --- | --- |
+| `oci://ghcr.io/sofyan48/charts/ai48home --version <version>` | A specific release; tag `v1.2.0` is chart version `1.2.0` |
+| `oci://ghcr.io/sofyan48/charts/ai48home:latest` | Latest `v*` release |
+| `ai48home-<version>.tgz`, `ai48home-latest.tgz` | GitHub release assets |
+
+The chart deploys one Home instance, a CPA worker StatefulSet with optional HPA, and optional internal PostgreSQL. Each chart version pins its Home image to the same release tag.
+
+**1. Write a private values file.** Keep it out of version control (`chmod 600`). The management key and gateway API key are optional: when left empty, the chart generates them on first install.
+
+```yaml
+# private-values.yaml
+global:
+  storageClass: nfs-client        # omit to use the cluster default StorageClass
+
+postgresql:
+  enabled: true                   # internal PostgreSQL; set false for an external database
+  auth:
+    username: ai48home
+    database: ai48home
+    password: "REPLACE_WITH_RANDOM_DATABASE_PASSWORD"  # openssl rand -hex 32
+
+secrets:
+  managementKey: ""               # optional; generated when empty
+  gatewayApiKey: ""               # optional; generated when empty
+
+workers:
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+```
+
+For an external database, set `postgresql.enabled: false` and fill `postgresql.external.host`, `port`, and `sslmode`.
+
+**2. Install or upgrade.** Check the target cluster first:
+
+```bash
+kubectl config current-context
+
+helm upgrade --install ai48home oci://ghcr.io/sofyan48/charts/ai48home \
+  --version 1.2.0 \
+  --namespace ai48home --create-namespace \
+  -f private-values.yaml --wait --timeout 10m
+```
+
+Pin `--version` in production. To inspect the newest release without installing it:
+
+```bash
+helm show values oci://ghcr.io/sofyan48/charts/ai48home --version 1.2.0
+helm pull oci://ghcr.io/sofyan48/charts/ai48home:latest
+```
+
+**3. Read the keys from the Secret.** These commands print secrets; do not paste their output into logs or chat:
+
+```bash
+# Management key: sign in at /admin/connect
+kubectl -n ai48home get secret ai48home-config \
+  -o jsonpath='{.data.management-key}' | base64 -d; echo
+
+# Gateway API key: client access to the worker API
+kubectl -n ai48home get secret ai48home-config \
+  -o jsonpath='{.data.gateway-api-key}' | base64 -d; echo
+```
+
+`helm get notes ai48home -n ai48home` shows the same commands again.
+
+**4. Check the deployment and open the console.**
+
+```bash
+kubectl -n ai48home get pods,svc,pvc
+kubectl -n ai48home get hpa ai48home-workers
+
+kubectl -n ai48home port-forward service/ai48home-home 8327:8327
+# Admin: http://127.0.0.1:8327/admin/connect   User: http://127.0.0.1:8327/app
+```
+
+Services with the default `fullnameOverride: ai48home`:
+
+| Service | Port | Purpose |
+| --- | --- | --- |
+| `ai48home-home` | 8327 | Home Management HTTP, Web interface, and RESP/mTLS |
+| `ai48home-worker` | 8317 | Worker API traffic for clients |
+
+Port-forwarding is for debugging only. For production traffic, set `workers.service.type: LoadBalancer` or route an Ingress to `ai48home-worker`, and keep Home private unless you deliberately expose it.
+
+**Upgrade and uninstall.**
+
+```bash
+helm upgrade ai48home oci://ghcr.io/sofyan48/charts/ai48home \
+  --version <new-version> -n ai48home -f private-values.yaml --wait --timeout 10m
+helm rollback ai48home -n ai48home          # return to the previous revision
+helm uninstall ai48home -n ai48home
+```
+
+Generated keys are reused on upgrades. Uninstall keeps worker PVCs; back up PostgreSQL and the `ai48home-config` Secret before deleting anything. To install from a source checkout instead of GHCR, use `./helm/ai48home` as the chart reference.
+
+See [helm/README.md](helm/README.md) for external PostgreSQL, StorageClass, autoscaling, migration from the old `cliproxy` chart, and troubleshooting.
+
 ### Developing both projects locally
 
 For frontend development, clone both repositories into sibling directories and run AI48Home and AI48HomeUI in separate terminals. Environment requirements are listed in [go.mod](go.mod) and the [AI48HomeUI README](https://github.com/sofyan48/AI48HomeUI#readme).
