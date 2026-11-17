@@ -113,6 +113,7 @@ func Register(group *gin.RouterGroup, handler *Handler) {
 
 	group.GET("/me", handler.CurrentUser)
 	group.GET("/request-logs", handler.ListCurrentUserRequestLogs)
+	group.GET("/analytics", handler.CurrentUserAnalytics)
 	group.GET("/billing/overview", handler.CurrentUserBillingOverview)
 	group.GET("/billing/charges", handler.ListCurrentUserBillingCharges)
 	group.GET("/billing/balance-records", handler.ListCurrentUserBillingBalanceRecords)

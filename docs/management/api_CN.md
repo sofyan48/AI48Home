@@ -32,7 +32,7 @@ Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 
 | --- | --- | --- |
 | Management API | `/v8/management` | 配置树和 Home 管理资源。 |
 | 已移除的 Management API | `/v0/management` | 已移除，请使用 v8 路由和请求体。 |
-| User API | `/user` | 基础路径及用户 token 认证保持不变，见 [User API](../user/api_CN.md)。 |
+| User API | `/user` | 基础路径及用户 token 认证保持不变，见 [User API](../user/api_CN.md)。新增需用户认证的 `GET /user/analytics`，提供有界 UTC 日期范围内按天、模型、API key 汇总的用量与实际扣费，可供客户端导出 CSV；详见 [User analytics](user-analytics.md)。 |
 | 插件资源 | `/v0/resource/plugins/...` | Home 返回的资源 URL 保留原路径。 |
 
 v8 配置格式声明 `config-version: 8`。它与 Home 发布版本号独立，也不表示 User API 或 RESP 协议升级到 v8。下方字段参考使用 v8 YAML/JSON 配置键路径；通过 HTTP 访问子树时，将点号换成 `/`。
