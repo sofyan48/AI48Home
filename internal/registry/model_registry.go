@@ -26,6 +26,10 @@ type NativeCapabilities struct {
 type ModelInfo struct {
 	// ID is the unique identifier for the model
 	ID string `json:"id"`
+	// LifecycleStatus distinguishes permanent retirement from temporary failures.
+	LifecycleStatus string `json:"lifecycle_status,omitempty"`
+	// RetirementDate is the provider's withdrawal date in YYYY-MM-DD (UTC).
+	RetirementDate string `json:"retirement_date,omitempty"`
 	// MetadataModelID preserves the original upstream identity for OAuth settings.
 	MetadataModelID string `json:"-" yaml:"-"`
 	// Object type for the model (typically "model")
@@ -191,6 +195,10 @@ func (r *ModelRegistry) RegisterClientWithCandidates(clientID, clientProvider st
 }
 
 func (r *ModelRegistry) registerClient(clientID, clientProvider string, models, candidates []*ModelInfo) {
+	models = FilterAvailableModels(clientProvider, models)
+	if candidates != nil {
+		candidates = FilterAvailableModels(clientProvider, candidates)
+	}
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	defer func() {

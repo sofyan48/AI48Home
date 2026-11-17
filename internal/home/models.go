@@ -117,6 +117,7 @@ func (r *Runtime) registerResolvedModelsForAuth(a *coreauth.Auth, providerKey st
 	if r == nil || a == nil || a.ID == "" {
 		return
 	}
+	models = registry.FilterAvailableModels(providerKey, models)
 	registry.GetGlobalRegistry().RegisterClientWithCandidates(a.ID, providerKey, models, candidates)
 	if r.coreManager != nil {
 		modelIDs := make([]string, 0, len(models))

@@ -3716,6 +3716,8 @@ Response: file attachment.
 
 Returns model definitions from either the current runtime registry or the static model catalog.
 
+Confirmed retired models are excluded from static definitions and credential registration (and thus the user catalog). Catalog entries may specify `lifecycle_status` (`retired`, `removed`, or `unavailable` exclude the entry) or `retirement_date` (`YYYY-MM-DD`, UTC). `deprecated` alone does not hide a still-working model; missing or invalid lifecycle dates remain backward compatible. Home also applies verified Anthropic retirement dates to the `claude` provider, including Claude 3.5 Haiku. These dates are not applied to other providers serving similarly named models. Retirement filtering runs when definitions are read or credentials are registered/refreshed; it does not probe every provider API or infer retirement from rate limits, authentication failures, or outages.
+
 Each model includes `providers`, the authoritative provider identifiers used by `usage.provider`
 and Billing model-price rules. Available v8 models additionally include `billing_models`, an array
 of `{"provider": "z-ai", "model": "glm-5.3-flash"}` execution identities resolved per credential.

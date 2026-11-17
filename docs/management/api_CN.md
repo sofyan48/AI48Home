@@ -3707,6 +3707,8 @@ Query 参数：
 
 从当前 runtime registry 或静态模型目录返回模型定义。
 
+已确认退役的模型不会进入静态定义或凭证注册，因此也不会出现在用户模型目录中。目录条目可设置 `lifecycle_status`（`retired`、`removed`、`unavailable` 会排除该条目）或 `retirement_date`（UTC，`YYYY-MM-DD`）。仅标记 `deprecated` 不会隐藏仍可调用的模型；缺失或无效日期保持向后兼容。Home 还会对 `claude` provider 应用已核实的 Anthropic 退役日期，包括 Claude 3.5 Haiku；不会将这些日期应用于提供同名模型的其他 provider。过滤在读取定义或注册/刷新凭证时执行，不会逐一探测所有 provider API，也不会将限流、认证失败或临时故障视为退役。
+
 每个模型都包含 `providers`，其值是 `usage.provider` 和 Billing 模型价格规则使用的权威
 provider 标识。客户端必须按每个 `(provider, model)` 组合生成一个候选项，不能从 `type`、
 `owned_by` 或静态目录分组名称推导 Billing provider。

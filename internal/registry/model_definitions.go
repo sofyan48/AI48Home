@@ -36,7 +36,7 @@ type staticModelsJSON struct {
 
 // GetClaudeModels returns the standard Claude model definitions.
 func GetClaudeModels() []*ModelInfo {
-	return cloneModelInfos(getModels().Claude)
+	return FilterAvailableModels("claude", cloneModelInfos(getModels().Claude))
 }
 
 // GetGeminiModels returns the standard Gemini model definitions.
@@ -395,7 +395,7 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 	default:
 		return nil
 	}
-	return withStaticModelProviders(models, provider)
+	return withStaticModelProviders(FilterAvailableModels(provider, models), provider)
 }
 
 // LookupStaticModelInfo searches all static model definitions for a model by ID.
