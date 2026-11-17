@@ -764,15 +764,7 @@ func applyOAuthFieldPatch(auth *coreauth.Auth, fields map[string]json.RawMessage
 				delete(auth.Metadata, legacy)
 			}
 		}
-		if metadataPath == "weight" {
-			// Attributes take precedence in the scheduler; remove stale overrides too.
-			delete(auth.Attributes, "weight")
-			if value == nil {
-				delete(auth.Metadata, "weight")
-				changed = true
-				continue
-			}
-		}
+
 		if metadataPath == "request_retry" {
 			if value == nil {
 				delete(auth.Metadata, "request_retry")

@@ -46,8 +46,12 @@ func TestApplyOAuthFieldPatchWeight(t *testing.T) {
 				if auth.Attributes["weight"] != "7" {
 					t.Fatal("omitted weight changed scheduler attribute")
 				}
-			} else if _, exists := auth.Attributes["weight"]; exists {
-				t.Fatal("stale scheduler weight attribute remains")
+			} else if test.want == nil {
+				if _, exists := auth.Attributes["weight"]; exists {
+					t.Fatal("scheduler weight attribute remains after clear")
+				}
+			} else if got := auth.Attributes["weight"]; got != strconv.FormatInt(*test.want, 10) {
+				t.Fatalf("scheduler weight = %q, want %d", got, *test.want)
 			}
 			if auth.Attributes["priority"] != "10" || !reflect.DeepEqual(auth.Metadata["token"], map[string]any{"access_token": "fixture"}) {
 				t.Fatal("unrelated metadata or attributes changed")
@@ -132,8 +136,12 @@ func TestPatchCredentialFieldsWeightDatabaseRoundTrip(t *testing.T) {
 				t.Fatalf("persisted weight = %s, want %s", raw, test.want)
 			}
 		}
-		if _, exists := persisted.Attributes["weight"]; exists {
-			t.Fatal("stale scheduler weight attribute persisted")
+		if test.want == "" {
+			if _, exists := persisted.Attributes["weight"]; exists {
+				t.Fatal("scheduler weight attribute persisted after clear")
+			}
+		} else if got := persisted.Attributes["weight"]; got != test.want {
+			t.Fatalf("persisted scheduler weight = %q, want %q", got, test.want)
 		}
 		if persisted.Attributes["priority"] != strconv.Itoa(10) || !reflect.DeepEqual(persisted.Metadata["token"], map[string]any{"access_token": "fixture"}) {
 			t.Fatal("unrelated auth metadata changed")
