@@ -16,6 +16,7 @@ var ErrUserAnalyticsKey = errors.New("analytics API key not found")
 type UserAnalyticsQuery struct {
 	From     time.Time
 	To       time.Time
+	Timezone string
 	Model    string
 	APIKeyID *uint
 }
@@ -75,9 +76,19 @@ func (r *Repository) UserAnalytics(ctx context.Context, userID uint, query UserA
 			return UserAnalyticsResult{}, ErrUserAnalyticsKey
 		}
 	}
+	timezone := query.Timezone
+	location, errLocation := time.LoadLocation(timezone)
+	if errLocation != nil {
+		timezone = "UTC"
+		location = time.UTC
+	}
 	dateExpr := `strftime('%Y-%m-%d', created_at)`
+	if timezone != "UTC" {
+		_, offset := time.Now().In(location).Zone()
+		dateExpr = fmt.Sprintf(`strftime('%%Y-%%m-%%d', created_at, '%+d seconds')`, offset)
+	}
 	if db.Dialector.Name() == "postgres" {
-		dateExpr = `to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')`
+		dateExpr = fmt.Sprintf(`to_char(created_at AT TIME ZONE '%s', 'YYYY-MM-DD')`, timezone)
 	}
 	scope := db.Table("billing_charge").Where("user_id = ? AND created_at >= ? AND created_at < ?", userID, query.From.UTC(), query.To.UTC())
 	if query.Model != "" {
@@ -102,8 +113,9 @@ func (r *Repository) UserAnalytics(ctx context.Context, userID uint, query UserA
 	}
 	result := UserAnalyticsResult{Daily: []UserAnalyticsDay{}, PerModel: []UserAnalyticsModel{}, PerKey: []UserAnalyticsKey{}}
 	days := map[string]int{}
-	from := query.From.UTC()
-	for day := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, time.UTC); day.Before(query.To); day = day.AddDate(0, 0, 1) {
+	from := query.From.In(location)
+	to := query.To.In(location)
+	for day := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, location); day.Before(to); day = day.AddDate(0, 0, 1) {
 		date := day.Format(time.DateOnly)
 		days[date] = len(result.Daily)
 		result.Daily = append(result.Daily, UserAnalyticsDay{Date: date})

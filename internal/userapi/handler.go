@@ -859,6 +859,7 @@ func (h *Handler) userResponse(record *cluster.UserRecord) gin.H {
 		"id":            record.ID,
 		"username":      record.Username,
 		"credits":       record.Credits,
+		"timezone":      record.Timezone,
 		"totp_enabled":  totpEnabled,
 		"passkey_count": len(passkeys),
 		"email_status":  userEmailStatusResponse(record, h.userEmailEnabled()),

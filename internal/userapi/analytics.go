@@ -29,7 +29,7 @@ func (h *Handler) CurrentUserAnalytics(c *gin.Context) {
 	if !ok {
 		return
 	}
-	query, errQuery := userAnalyticsQuery(c, time.Now())
+	query, errQuery := userAnalyticsQuery(c, time.Now(), user.Timezone)
 	if errQuery != nil {
 		respondError(c, http.StatusBadRequest, "invalid_analytics_query", errQuery)
 		return
@@ -44,15 +44,19 @@ func (h *Handler) CurrentUserAnalytics(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, userAnalyticsResponse{
-		From: query.From, To: query.To, Timezone: "UTC", Source: "billing_charge",
+		From: query.From, To: query.To, Timezone: query.Timezone, Source: "billing_charge",
 		Model: query.Model, APIKeyID: query.APIKeyID, UserAnalyticsResult: result,
 	})
 }
 
-func userAnalyticsQuery(c *gin.Context, now time.Time) (cluster.UserAnalyticsQuery, error) {
-	now = now.UTC()
-	to := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
-	query := cluster.UserAnalyticsQuery{To: to}
+func userAnalyticsQuery(c *gin.Context, now time.Time, timezone string) (cluster.UserAnalyticsQuery, error) {
+	location, errLocation := time.LoadLocation(timezone)
+	if errLocation != nil {
+		timezone, location = "UTC", time.UTC
+	}
+	now = now.In(location)
+	to := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, location)
+	query := cluster.UserAnalyticsQuery{To: to.UTC(), Timezone: timezone}
 	values := c.Request.URL.Query()
 	for _, key := range []string{"from", "to", "model", "api_key_id"} {
 		if entries, exists := values[key]; exists && (len(entries) != 1 || strings.TrimSpace(entries[0]) == "") {
@@ -69,14 +73,20 @@ func userAnalyticsQuery(c *gin.Context, now time.Time) (cluster.UserAnalyticsQue
 				return query, fmt.Errorf("%s must be YYYY-MM-DD or RFC3339", key)
 			}
 			if key == "to" {
+				if len(raw[0]) == len(time.DateOnly) {
+					parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, location).AddDate(0, 0, 1)
+				}
 				query.To = parsed.UTC()
 			} else {
+				if len(raw[0]) == len(time.DateOnly) {
+					parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, location)
+				}
 				query.From = parsed.UTC()
 			}
 		}
 	}
 	if _, exists := values["from"]; !exists {
-		query.From = query.To.AddDate(0, 0, -30)
+		query.From = query.To.AddDate(0, 0, -7)
 	}
 	if !query.From.Before(query.To) || query.To.Sub(query.From) > cluster.UserAnalyticsMaxRange {
 		return query, fmt.Errorf("range must be positive and at most 366 days; to is exclusive")

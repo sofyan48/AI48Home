@@ -90,7 +90,7 @@ func TestUserAnalyticsDateRange(t *testing.T) {
 	} {
 		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 		ctx.Request = httptest.NewRequest(http.MethodGet, "/user/analytics"+test.query, nil)
-		query, errQuery := userAnalyticsQuery(ctx, now)
+		query, errQuery := userAnalyticsQuery(ctx, now, "UTC")
 		if (errQuery == nil) != test.valid {
 			t.Fatalf("%s query=%+v err=%v", test.query, query, errQuery)
 		}
