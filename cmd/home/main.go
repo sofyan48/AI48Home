@@ -18,6 +18,7 @@ import (
 	"time"
 
 	cpasdkauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/alerting"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
@@ -453,7 +454,14 @@ func run() int {
 	if cfgPath == "" {
 		cfgPath = strings.TrimSpace(configPath)
 	}
-	mgmtOpts := make([]managementhttp.RouteOption, 0, 1)
+	mgmtOpts := make([]managementhttp.RouteOption, 0, 2)
+	// AI48: alerting extension (internal/alerting); keep this block small for upstream merges.
+	alertingService := alerting.NewService(clusterDB)
+	if errAlerting := alertingService.Start(runCtx); errAlerting != nil {
+		log.WithError(errAlerting).Error("failed to start alerting")
+	} else {
+		mgmtOpts = append(mgmtOpts, alerting.RouteOption(alertingService))
+	}
 	if clusterRepo != nil {
 		mgmtOpts = append(mgmtOpts, managementhttp.WithDatabaseManagement(managementhttp.DatabaseManagementOption{
 			Enabled:             true,

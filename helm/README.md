@@ -11,7 +11,16 @@ This chart follows the topology in `install.sh`: optional internal PostgreSQL, o
 
 ## Install
 
-Create a private values file outside version control and restrict its permissions:
+Start with [`values.yaml.example`](values.yaml.example), which documents the values supported by this chart. Copy it to a private file outside version control, restrict its permissions, and replace the database host, username, database, and password with your actual PostgreSQL connection settings. The example uses external PostgreSQL; set `postgresql.enabled: true` to deploy the internal database instead. Adjust all `persistence.storageClass` values to match your cluster.
+
+From the repository root:
+
+```bash
+cp helm/values.yaml.example /path/to/private-values.yaml
+chmod 600 /path/to/private-values.yaml
+```
+
+The following is only a secrets override, not a complete external database configuration:
 
 ```yaml
 secrets:

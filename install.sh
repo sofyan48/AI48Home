@@ -26,7 +26,7 @@ compose() {
 
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
-    fail "Jalankan sebagai root: sudo bash $0 ${ACTION}"
+    fail "Run as root: sudo bash $0 ${ACTION}"
   fi
 }
 
@@ -45,13 +45,13 @@ require_commands() {
   fi
 
   if ((${#missing[@]} > 0)); then
-    fail "Dependency belum tersedia: ${missing[*]}. Install Docker Engine, Docker Compose plugin, curl, jq, dan openssl terlebih dahulu."
+    fail "Missing dependencies: ${missing[*]}. Install Docker Engine, the Docker Compose plugin, curl, jq, and openssl first."
   fi
 }
 
 require_existing_installation() {
-  [[ -f "$ENV_FILE" ]] || fail "File $ENV_FILE tidak ditemukan. Jalankan '$0 deploy' terlebih dahulu."
-  [[ -f "$COMPOSE_FILE" ]] || fail "File $COMPOSE_FILE tidak ditemukan. Jalankan '$0 deploy' terlebih dahulu."
+  [[ -f "$ENV_FILE" ]] || fail "File $ENV_FILE not found. Run '$0 deploy' first."
+  [[ -f "$COMPOSE_FILE" ]] || fail "File $COMPOSE_FILE not found. Run '$0 deploy' first."
 }
 
 random_hex() {
@@ -88,7 +88,7 @@ wait_for_postgres() {
   done
 
   compose logs --tail=100 postgres || true
-  fail "PostgreSQL tidak menjadi ready."
+  fail "PostgreSQL did not become ready."
 }
 
 home_is_ready() {
@@ -126,7 +126,7 @@ wait_for_home() {
   fi
 
   compose logs --tail=150 home || true
-  fail "AI48Home tidak menjadi ready."
+  fail "AI48Home did not become ready."
 }
 
 generate_home_jwt() {
@@ -148,7 +148,7 @@ validate_unique_jwts() {
   if [[ -n "$jwt_1" && "$jwt_1" == "$jwt_2" ]] || \
      [[ -n "$jwt_1" && "$jwt_1" == "$jwt_3" ]] || \
      [[ -n "$jwt_2" && "$jwt_2" == "$jwt_3" ]]; then
-    fail "HOME_JWT_1, HOME_JWT_2, dan HOME_JWT_3 harus berbeda. Gunakan perintah repair-worker untuk worker yang bentrok."
+    fail "HOME_JWT_1, HOME_JWT_2, and HOME_JWT_3 must be different. Use the repair-worker command for the worker with a conflicting JWT."
   fi
 }
 
@@ -174,7 +174,7 @@ write_files() {
 
   cat > "$BASE_DIR/config.yaml" <<EOF_CONFIG
 host: ""
-# CPA worker listener; Home uses node.port in cluster.yaml.
+# CPA worker listener; AI48Home uses node.port in cluster.yaml.
 port: 8317
 
 allow-host: []
@@ -317,8 +317,8 @@ services:
       - ./worker-1-plugins:/CLIProxyAPI/plugins
     command: >
       sh -eu -c '
-        test -n "\$\$HOME_JWT" || { echo "HOME_JWT_1 kosong" >&2; exit 1; }
-        echo "Menunggu \$\${WORKER_START_DELAY}s agar membership lama kedaluwarsa"
+        test -n "\$\$HOME_JWT" || { echo "HOME_JWT_1 is empty" >&2; exit 1; }
+        echo "Waiting \$\${WORKER_START_DELAY}s for the previous membership to expire"
         sleep "\$\${WORKER_START_DELAY}"
         exec ./CLIProxyAPI -home-jwt "\$\$HOME_JWT"
       '
@@ -341,8 +341,8 @@ services:
       - ./worker-2-plugins:/CLIProxyAPI/plugins
     command: >
       sh -eu -c '
-        test -n "\$\$HOME_JWT" || { echo "HOME_JWT_2 kosong" >&2; exit 1; }
-        echo "Menunggu \$\${WORKER_START_DELAY}s agar membership lama kedaluwarsa"
+        test -n "\$\$HOME_JWT" || { echo "HOME_JWT_2 is empty" >&2; exit 1; }
+        echo "Waiting \$\${WORKER_START_DELAY}s for the previous membership to expire"
         sleep "\$\${WORKER_START_DELAY}"
         exec ./CLIProxyAPI -home-jwt "\$\$HOME_JWT"
       '
@@ -365,8 +365,8 @@ services:
       - ./worker-3-plugins:/CLIProxyAPI/plugins
     command: >
       sh -eu -c '
-        test -n "\$\$HOME_JWT" || { echo "HOME_JWT_3 kosong" >&2; exit 1; }
-        echo "Menunggu \$\${WORKER_START_DELAY}s agar membership lama kedaluwarsa"
+        test -n "\$\$HOME_JWT" || { echo "HOME_JWT_3 is empty" >&2; exit 1; }
+        echo "Waiting \$\${WORKER_START_DELAY}s for the previous membership to expire"
         sleep "\$\${WORKER_START_DELAY}"
         exec ./CLIProxyAPI -home-jwt "\$\$HOME_JWT"
       '
@@ -409,13 +409,13 @@ ensure_home_initialized() {
     return 0
   fi
 
-  log "Mengecek apakah database Home sudah memiliki config snapshot"
+  log "Checking whether the AI48Home database already has a configuration snapshot"
   if wait_for_home_seconds "$management_key" 45; then
     touch "$BOOTSTRAP_MARKER"
     return 0
   fi
 
-  log "Home belum terinisialisasi; menjalankan import awal satu kali"
+  log "AI48Home is not initialized; running the initial import once"
   compose stop home >/dev/null 2>&1 || true
 
   compose run --rm --no-deps \
@@ -435,7 +435,7 @@ ensure_worker_jwts() {
     current_jwt="$(read_env_value "HOME_JWT_${worker_number}" || true)"
 
     if [[ -z "$current_jwt" ]]; then
-      log "Membuat sertifikat/JWT unik untuk worker ${worker_number}"
+      log "Generating a unique certificate/JWT for worker ${worker_number}"
       new_jwt="$(generate_home_jwt "$management_key")"
       set_env_value "HOME_JWT_${worker_number}" "$new_jwt"
     fi
@@ -451,7 +451,7 @@ show_status() {
   management_key="$(read_env_value MANAGEMENT_KEY)"
 
   compose ps
-  printf '\nNode yang terhubung ke Home:\n'
+  printf '\nNodes connected to AI48Home:\n'
   curl -fsS \
     -H "X-MANAGEMENT-KEY: ${management_key}" \
     http://127.0.0.1:8327/v0/management/nodes | jq . || true
@@ -464,28 +464,28 @@ start_cluster() {
   management_key="$(read_env_value MANAGEMENT_KEY)"
   validate_unique_jwts
 
-  log "Menyalakan PostgreSQL"
+  log "Starting PostgreSQL"
   compose up -d postgres
   wait_for_postgres
 
-  log "Menyalakan AI48Home"
+  log "Starting AI48Home"
   compose up -d home
   wait_for_home "$management_key"
 
-  log "Menyalakan worker dan Nginx"
+  log "Starting workers and Nginx"
   compose up -d cliproxy-1 cliproxy-2 cliproxy-3 nginx
 
-  log "Worker akan reconnect setelah ${WORKER_START_DELAY_SECONDS}-$((WORKER_START_DELAY_SECONDS + 4)) detik"
+  log "Workers will reconnect after ${WORKER_START_DELAY_SECONDS}-$((WORKER_START_DELAY_SECONDS + 4)) seconds"
   compose ps
 }
 
 stop_cluster() {
   require_existing_installation
 
-  log "Menghentikan Nginx dan semua worker secara graceful"
+  log "Gracefully stopping Nginx and all workers"
   compose stop nginx cliproxy-1 cliproxy-2 cliproxy-3
 
-  log "Menghentikan Home dan PostgreSQL"
+  log "Stopping AI48Home and PostgreSQL"
   compose stop home postgres
 }
 
@@ -496,19 +496,19 @@ restart_cluster() {
   management_key="$(read_env_value MANAGEMENT_KEY)"
   validate_unique_jwts
 
-  log "Menghentikan traffic masuk dan semua worker"
+  log "Stopping incoming traffic and all workers"
   compose stop nginx cliproxy-1 cliproxy-2 cliproxy-3
 
-  log "Merestart PostgreSQL dan Home"
+  log "Restarting PostgreSQL and AI48Home"
   compose up -d postgres
   wait_for_postgres
   compose restart home
   wait_for_home "$management_key"
 
-  log "Menyalakan worker; startup delay mencegah konflik active membership"
+  log "Starting workers; the startup delay prevents active membership conflicts"
   compose up -d cliproxy-1 cliproxy-2 cliproxy-3 nginx
 
-  log "Worker akan reconnect setelah ${WORKER_START_DELAY_SECONDS}-$((WORKER_START_DELAY_SECONDS + 4)) detik"
+  log "Workers will reconnect after ${WORKER_START_DELAY_SECONDS}-$((WORKER_START_DELAY_SECONDS + 4)) seconds"
   compose ps
 }
 
@@ -531,14 +531,14 @@ upgrade_home() {
     set_env_value HOME_IMAGE "${image/\/cliproxyapihome:/\/ai48home:}"
   fi
   if grep -q '/CLIProxyAPIHome/' "$COMPOSE_FILE"; then
-    log "Memperbarui path container lama /CLIProxyAPIHome ke /AI48Home"
+    log "Updating legacy container paths from /CLIProxyAPIHome to /AI48Home"
     sed -i 's#:/CLIProxyAPIHome/#:/AI48Home/#g; s#container_name: cliproxy-home#container_name: ai48home#' "$COMPOSE_FILE"
   fi
 
-  log "Menarik image Home terbaru: $(read_env_value HOME_IMAGE)"
+  log "Pulling the latest AI48Home image: $(read_env_value HOME_IMAGE)"
   compose pull home
 
-  log "Mengganti container Home (worker tetap berjalan dan reconnect otomatis)"
+  log "Replacing the AI48Home container (workers keep running and reconnect automatically)"
   compose up -d --no-deps home
   wait_for_home "$management_key"
 
@@ -551,16 +551,16 @@ repair_worker() {
 
   require_existing_installation
 
-  [[ "$worker_number" =~ ^[123]$ ]] || fail "Nomor worker harus 1, 2, atau 3."
+  [[ "$worker_number" =~ ^[123]$ ]] || fail "Worker number must be 1, 2, or 3."
 
   management_key="$(read_env_value MANAGEMENT_KEY)"
 
-  log "Menghentikan Nginx dan worker ${worker_number}"
+  log "Stopping Nginx and worker ${worker_number}"
   compose stop nginx "cliproxy-${worker_number}" || true
 
   backup_dir="$BASE_DIR/worker-${worker_number}-home.backup-$(date '+%Y%m%d-%H%M%S')"
   if [[ -d "$BASE_DIR/worker-${worker_number}-home" ]]; then
-    log "Membackup identity lama ke $backup_dir"
+    log "Backing up the previous identity to $backup_dir"
     mv "$BASE_DIR/worker-${worker_number}-home" "$backup_dir"
   fi
   mkdir -p "$BASE_DIR/worker-${worker_number}-home"
@@ -572,15 +572,15 @@ repair_worker() {
     wait_for_home "$management_key"
   fi
 
-  log "Membuat JWT/certificate baru untuk worker ${worker_number}"
+  log "Generating a new JWT/certificate for worker ${worker_number}"
   new_jwt="$(generate_home_jwt "$management_key")"
   set_env_value "HOME_JWT_${worker_number}" "$new_jwt"
   validate_unique_jwts
 
-  log "Menyalakan kembali worker ${worker_number} dan Nginx"
+  log "Restarting worker ${worker_number} and Nginx"
   compose up -d --force-recreate "cliproxy-${worker_number}" nginx
 
-  log "Pantau dengan: cd $BASE_DIR && docker compose logs -f cliproxy-${worker_number}"
+  log "Monitor with: cd $BASE_DIR && docker compose logs -f cliproxy-${worker_number}"
 }
 
 deploy_cluster() {
@@ -610,71 +610,71 @@ EOF_ENV
   management_key="$(read_env_value MANAGEMENT_KEY)"
   gateway_api_key="$(read_env_value GATEWAY_API_KEY)"
 
-  [[ -n "$postgres_password" ]] || fail "POSTGRES_PASSWORD kosong di $ENV_FILE"
-  [[ -n "$management_key" ]] || fail "MANAGEMENT_KEY kosong di $ENV_FILE"
-  [[ -n "$gateway_api_key" ]] || fail "GATEWAY_API_KEY kosong di $ENV_FILE"
+  [[ -n "$postgres_password" ]] || fail "POSTGRES_PASSWORD is empty in $ENV_FILE"
+  [[ -n "$management_key" ]] || fail "MANAGEMENT_KEY is empty in $ENV_FILE"
+  [[ -n "$gateway_api_key" ]] || fail "GATEWAY_API_KEY is empty in $ENV_FILE"
 
   if ((WORKER_START_DELAY_SECONDS <= HEARTBEAT_TIMEOUT_SECONDS)); then
-    fail "WORKER_START_DELAY_SECONDS harus lebih besar dari HEARTBEAT_TIMEOUT_SECONDS."
+    fail "WORKER_START_DELAY_SECONDS must be greater than HEARTBEAT_TIMEOUT_SECONDS."
   fi
 
-  log "Menulis konfigurasi deployment ke $BASE_DIR"
+  log "Writing deployment configuration to $BASE_DIR"
   write_files "$postgres_password" "$management_key" "$gateway_api_key"
 
   cd "$BASE_DIR"
 
-  log "Memvalidasi Docker Compose"
+  log "Validating Docker Compose"
   compose config >/dev/null
 
-  log "Mengunduh image"
+  log "Pulling images"
   compose pull
 
-  log "Menyalakan PostgreSQL"
+  log "Starting PostgreSQL"
   compose up -d postgres
   wait_for_postgres
 
-  log "Menyiapkan AI48Home"
+  log "Initializing AI48Home"
   ensure_home_initialized "$management_key"
 
   ensure_worker_jwts "$management_key"
 
-  log "Menyalakan tiga worker dan Nginx load balancer"
+  log "Starting three workers and the Nginx load balancer"
   compose up -d cliproxy-1 cliproxy-2 cliproxy-3 nginx
 
-  log "Worker akan reconnect setelah ${WORKER_START_DELAY_SECONDS}-$((WORKER_START_DELAY_SECONDS + 4)) detik"
+  log "Workers will reconnect after ${WORKER_START_DELAY_SECONDS}-$((WORKER_START_DELAY_SECONDS + 4)) seconds"
 
-  log "Status container"
+  log "Container status"
   compose ps
 
   cat <<EOF_RESULT
 
 ============================================================
-SELESAI
+AI48Home INSTALLATION COMPLETE
 ============================================================
 Gateway/LB       : http://IP-SERVER:8317
-Management lokal: http://127.0.0.1:8327/management.html
+Local management: http://127.0.0.1:8327/management.html
 Management key  : ${management_key}
 Gateway API key : ${gateway_api_key}
 Directory       : ${BASE_DIR}
 
-Perintah operasional:
-  sudo bash $0 upgrade          # tarik image GHCR terbaru
-  sudo bash $0 upgrade v1.2.0   # pindah ke tag tertentu
+Operational commands:
+  sudo bash $0 upgrade          # pull the latest GHCR image
+  sudo bash $0 upgrade v1.2.0   # switch to a specific tag
   sudo bash $0 restart
   sudo bash $0 stop
   sudo bash $0 start
   sudo bash $0 status
   sudo bash $0 repair-worker 3
 
-Tes dari server setelah worker selesai startup:
+Test from the server after the workers finish starting:
   curl -sS http://127.0.0.1:8317/v1/models \\
     -H 'Authorization: Bearer ${gateway_api_key}' | jq
 
-Catatan:
-- HOME_JWT dan identity worker dipertahankan pada bind mount masing-masing.
-- Worker menunggu lebih lama daripada heartbeat-timeout sebelum reconnect.
-- Import konfigurasi PostgreSQL hanya dilakukan saat bootstrap pertama.
-- Jangan menghapus worker-*-home, home-data, atau postgres-data.
+Notes:
+- HOME_JWT and worker identities are preserved in their respective bind mounts.
+- Workers wait longer than heartbeat-timeout before reconnecting.
+- Configuration is imported into PostgreSQL only during the initial bootstrap.
+- Do not delete worker-*-home, home-data, or postgres-data.
 ============================================================
 EOF_RESULT
 }
@@ -703,11 +703,11 @@ main() {
       upgrade_home
       ;;
     repair-worker)
-      [[ -n "$ACTION_ARG" ]] || fail "Gunakan: $0 repair-worker <1|2|3>"
+      [[ -n "$ACTION_ARG" ]] || fail "Usage: $0 repair-worker <1|2|3>"
       repair_worker "$ACTION_ARG"
       ;;
     *)
-      fail "Action tidak dikenal: $ACTION. Gunakan deploy, upgrade, restart, start, stop, status, atau repair-worker."
+      fail "Unknown action: $ACTION. Use deploy, upgrade, restart, start, stop, status, or repair-worker."
       ;;
   esac
 }

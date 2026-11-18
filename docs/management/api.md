@@ -32,7 +32,7 @@ This reference uses the v8 Management API. `/v0/management` has been removed; re
 | --- | --- | --- |
 | Management API | `/v8/management` | Configuration tree plus Home management resources. |
 | Retired Management API | `/v0/management` | Removed; use the v8 routes and request bodies. |
-| User API | `/user` | Unchanged base path and user-token authentication; see [User API](../user/api.md). |
+| User API | `/user` | Unchanged base path and user-token authentication; see [User API](../user/api.md). Authenticated `GET /user/analytics` provides bounded UTC daily/model/key usage and actual billed costs for client-side CSV export; see [User analytics](user-analytics.md). |
 | Plugin assets | `/v0/resource/plugins/...` | Asset URLs returned by Home keep their existing path. |
 
 The v8 configuration format declares `config-version: 8`. This is independent of Home's release tag and does not version the User API or the RESP protocol. The field reference below uses v8 YAML/JSON key paths; replace dots with slashes to address a config subtree through HTTP.

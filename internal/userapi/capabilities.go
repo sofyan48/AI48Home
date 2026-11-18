@@ -36,6 +36,7 @@ func (h *Handler) GetCapabilities(c *gin.Context) {
 			// handling a 404 as if it were an outage.
 			"model_catalog": true,
 			"request_logs":  true,
+			"analytics":     true,
 			// Playground conversations are stored server-side per user.
 			"chat_history": true,
 		},

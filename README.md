@@ -4,9 +4,18 @@ English | [中文](README_CN.md)
 
 > AI48Home is based on [router-for-me/CLIProxyAPIHome](https://github.com/router-for-me/CLIProxyAPIHome) and its panel [Home Management Center](https://github.com/router-for-me/Home-Management-Center). Both are MIT-licensed; the original copyright notice is kept in [LICENSE](LICENSE).
 
-AI48Home is a comprehensive credential **management, scheduling, and distribution** service designed for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
+AI48Home is a **centralized control plane for clusters of AI gateways** powered by [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). It brings multiple CLIProxyAPI gateway nodes under one management system, so operators can control their deployment centrally and scale request processing across multiple nodes and clusters.
 
-It serves as a centralized hub for managing and scheduling API credentials in large-scale CLIProxyAPI cluster deployments. CLIProxyAPI nodes communicate with Home to retrieve necessary API credentials and report usage statistics.
+Instead of managing each gateway independently, AI48Home centralizes configuration, API credentials, credential scheduling and distribution, and usage reporting. CLIProxyAPI nodes connect to AI48Home to retrieve configuration and dispatchable credentials, then report usage and request logs back to Home.
+
+### How it supports distributed traffic
+
+- **Centralized control**: Manage gateway configuration, provider accounts, credentials, and usage from one control plane and Web interface.
+- **Distributed request processing**: Run multiple CLIProxyAPI gateways across servers or clusters to share the AI request workload rather than relying on a single gateway.
+- **Coordinated credential scheduling**: Home schedules and distributes credentials to connected gateways, keeping credential selection centrally managed as the deployment grows.
+- **Shared control-plane state**: Use PostgreSQL when running multiple active Home instances; a single Home instance can use SQLite and still manage multiple CLIProxyAPI gateways.
+
+AI48Home manages the control plane; CLIProxyAPI gateways handle AI API requests. Use an ingress, reverse proxy, or load balancer in front of the gateways to distribute incoming client traffic across nodes or clusters. Home's credential scheduling complements this traffic routing rather than replacing it.
 
 ## AI48Home and AI48HomeUI
 
