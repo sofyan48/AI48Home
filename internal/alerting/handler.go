@@ -28,6 +28,7 @@ func RouteOption(service *Service) managementhttp.RouteOption {
 		r.Set(http.MethodDelete, "/alerting/channels/:id", h.deleteChannel)
 		r.Set(http.MethodPost, "/alerting/channels/:id/test", h.testChannel)
 		r.Set(http.MethodGet, "/alerting/alerts", h.listAlerts)
+		r.Set(http.MethodPost, "/alerting/alerts/resolve", h.resolveAlert)
 		r.Set(http.MethodPost, "/alerting/evaluate", h.evaluate)
 		r.Set(http.MethodDelete, "/alerting/nodes/:node_id", h.forgetNode)
 	}
@@ -272,6 +273,31 @@ func (h *handler) listAlerts(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"items": states})
+}
+
+func (h *handler) resolveAlert(c *gin.Context) {
+	var req struct {
+		Key string `json:"key"`
+	}
+	if errBind := c.ShouldBindJSON(&req); errBind != nil {
+		respondError(c, http.StatusBadRequest, "invalid_body", errBind)
+		return
+	}
+	if strings.TrimSpace(req.Key) == "" {
+		respondError(c, http.StatusBadRequest, "invalid_key", nil)
+		return
+	}
+	ctx, cancel := requestContext(c)
+	defer cancel()
+	if errResolve := h.service.Resolve(ctx, req.Key); errResolve != nil {
+		if errors.Is(errResolve, ErrAlertNotFound) {
+			respondError(c, http.StatusNotFound, "alert_not_found", errResolve)
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "alerting_alert_resolve_failed", errResolve)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func (h *handler) evaluate(c *gin.Context) {

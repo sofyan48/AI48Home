@@ -119,6 +119,40 @@ func (s *Service) Evaluate(ctx context.Context, settings Settings) error {
 	return nil
 }
 
+// Resolve resets one firing alert without suppressing future evaluations or
+// removing node tracking. Notification failures are logged, as in Evaluate.
+func (s *Service) Resolve(ctx context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, errState := s.store.firingState(ctx, key)
+	if errState != nil {
+		return errState
+	}
+	settings, errSettings := s.store.GetSettings(ctx)
+	if errSettings != nil {
+		return errSettings
+	}
+	var channels []Channel
+	if settings.SendResolved {
+		loaded, errChannels := s.enabledChannels(ctx)
+		if errChannels != nil {
+			return errChannels
+		}
+		channels = loaded
+	}
+	if errDelete := s.store.deleteFiringState(ctx, key); errDelete != nil {
+		return errDelete
+	}
+	if settings.SendResolved {
+		s.broadcast(ctx, channels, Message{
+			Rule: state.Rule, Title: state.Title, Detail: "Manually resolved by an operator.",
+			Resolved: true, Time: time.Now().UTC(),
+		})
+	}
+	return nil
+}
+
 func (s *Service) collect(ctx context.Context, settings Settings, now time.Time) ([]candidate, map[string]struct{}, error) {
 	evaluated := make(map[string]struct{})
 	out := make([]candidate, 0)

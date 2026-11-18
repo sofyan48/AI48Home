@@ -39,6 +39,12 @@ Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 
 
 v8 配置格式声明 `config-version: 8`。它与 Home 发布版本号独立，也不表示 User API 或 RESP 协议升级到 v8。下方字段参考使用 v8 YAML/JSON 配置键路径；通过 HTTP 访问子树时，将点号换成 `/`。
 
+## 手动解除告警
+
+`POST /alerting/alerts/resolve`（基础路径 `/v8/management`，使用正常的管理认证）接收 `{"key":"node_offline:node/a"}`。请将告警列表返回的完整 key 放在 JSON 请求体中，以支持包含 `/` 的 key。成功返回 `200 {"status":"ok"}`；无效请求体或 key 返回 `400`，不存在或尚未触发的告警返回 `404 alert_not_found`，数据库或配置错误返回 `500 alerting_alert_resolve_failed`。
+
+此操作仅删除指定的已触发告警状态，不影响其他告警或节点跟踪。这是一次性重置，不是持久抑制：如果条件仍然成立，下一次评估仍可按规则的正常等待期再次触发。`send_resolved` 为 true 时，删除成功后向已启用的通道发送解除通知，详情明确为 `Manually resolved by an operator.`；发送失败仅记录日志，不撤销重置。忘记节点仍是单独的操作。请求校验、通知行为及并发限制详见 [Alerting](alerting.md#post-alertingalertsresolve)。
+
 ## Runtime 模型
 
 Home management state 存储在 database-backed cluster repository 中。如果存在 `cluster.yaml`，repository 使用其中配置的后端，例如 PostgreSQL 或 SQLite。如果不存在 cluster config，Home 仍会打开本地 SQLite runtime database，并使用同一套 DB-backed management handlers。

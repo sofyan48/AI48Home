@@ -39,6 +39,12 @@ This reference uses the v8 Management API. `/v0/management` has been removed; re
 
 The v8 configuration format declares `config-version: 8`. This is independent of Home's release tag and does not version the User API or the RESP protocol. The field reference below uses v8 YAML/JSON key paths; replace dots with slashes to address a config subtree through HTTP.
 
+## Manual Alert Resolution
+
+`POST /alerting/alerts/resolve` (under `/v8/management`, using normal management authentication) accepts `{"key":"node_offline:node/a"}`. Pass the exact alert key in the JSON body to support slash-containing keys. Success returns `200 {"status":"ok"}`; invalid bodies/keys return `400`, absent or nonfiring alerts return `404 alert_not_found`, and database/configuration failures return `500 alerting_alert_resolve_failed`.
+
+This deletes only the selected firing state, preserving other alerts and node tracking. It is a one-shot reset, not persistent suppression: a still-active condition can fire again on the next evaluation, subject to normal hold periods. If `send_resolved` is true, enabled channels receive a resolved notification explicitly marked `Manually resolved by an operator.` after deletion; delivery failures are logged without undoing the reset. See [Alerting](alerting.md#post-alertingalertsresolve) for validation details, notification behavior, and concurrency limits. Forgetting a node remains a separate operation.
+
 ## Runtime Model
 
 Home management state is stored in the database-backed cluster repository. When `cluster.yaml` is present, the repository uses the configured backend, such as PostgreSQL or SQLite. When no cluster config is present, Home still opens a local SQLite runtime database and uses the same DB-backed management handlers.

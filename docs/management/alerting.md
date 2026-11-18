@@ -1,6 +1,6 @@
 # Alerting (Telegram / Microsoft Teams)
 
-AI48Home-specific extension implemented in `internal/alerting/`. It is kept separate from `api.md` to avoid upstream merge conflicts.
+AI48Home-specific extension implemented in `internal/alerting/`. This document contains the detailed alerting contract linked from `api.md`.
 
 Home evaluates alert rules every `interval_seconds` by reading existing tables (`auth`, `quota_window`, `cpa_node`). Notifications are sent only on state transitions (firing, and resolved when `send_resolved` is true). When several Homes share a PostgreSQL database, a lease in `alert_lease` ensures only one Home evaluates and sends.
 
@@ -132,6 +132,22 @@ Query: `firing=false` also includes alerts still in their hold period. Default r
   ]
 }
 ```
+
+### `POST /alerting/alerts/resolve`
+
+Manually resolves one currently firing alert. Send the exact `key` returned by the alert list in a JSON body, not a URL path segment, so keys containing `/` are supported:
+
+```json
+{ "key": "node_offline:node/a" }
+```
+
+Response: `200 {"status":"ok"}`. Invalid JSON or a non-string key returns `400 invalid_body`; a missing, null, empty, or whitespace-only key returns `400 invalid_key`. Absent or nonfiring alerts return `404 alert_not_found`. Database/configuration errors return `500 alerting_alert_resolve_failed`.
+
+This is a **one-shot reset**, not acknowledgment or persistent suppression: it deletes only the selected firing state. A still-active condition can fire again on the next evaluation (subject to the rule's normal hold period). Other alerts and CPA node tracking are unchanged; use `DELETE /alerting/nodes/:node_id` separately to forget a decommissioned node.
+
+When `send_resolved` is true, enabled channels receive a resolved notification with detail `Manually resolved by an operator.` only after successful deletion. When false, no notification is sent. Manual resolution works even when automatic evaluation or the rule is disabled. Notification delivery failures are logged, as for evaluation notifications; they do not restore the state or fail the successful reset.
+
+Resolution and evaluation share this Home service's mutex. This does not introduce cross-Home serialization or change the existing evaluator lease; another Home can still evaluate concurrently.
 
 ### `POST /alerting/evaluate`
 

@@ -15,6 +15,9 @@ import (
 // ErrChannelNotFound is returned when a channel id does not exist.
 var ErrChannelNotFound = errors.New("alert channel not found")
 
+// ErrAlertNotFound is returned when an alert is absent or not firing.
+var ErrAlertNotFound = errors.New("firing alert not found")
+
 // Store persists alerting data in alert_* tables.
 type Store struct {
 	db *gorm.DB
@@ -171,6 +174,29 @@ func (s *Store) loadStates(ctx context.Context) (map[string]State, error) {
 		out[record.Key] = record
 	}
 	return out, nil
+}
+
+func (s *Store) firingState(ctx context.Context, key string) (State, error) {
+	var state State
+	result := s.db.WithContext(ctx).Where("alert_key = ? AND firing = ?", key, true).Limit(1).Find(&state)
+	if result.Error != nil {
+		return State{}, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return State{}, ErrAlertNotFound
+	}
+	return state, nil
+}
+
+func (s *Store) deleteFiringState(ctx context.Context, key string) error {
+	result := s.db.WithContext(ctx).Where("alert_key = ? AND firing = ?", key, true).Delete(&State{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrAlertNotFound
+	}
+	return nil
 }
 
 func (s *Store) saveState(ctx context.Context, state State) error {
