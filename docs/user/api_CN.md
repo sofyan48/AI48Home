@@ -166,6 +166,7 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `POST` | `/login/totp` |
 | `POST` | `/login/passkey` |
 | `GET` | `/me` |
+| `PATCH` | `/me` |
 | `PATCH` | `/password` |
 | `POST` | `/password` |
 | `POST` | `/password/forgot` |
@@ -224,6 +225,7 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
     "email_registration": true,
     "email_verification": true,
     "password_recovery": true,
+    "profile_edit": true,
     "model_catalog": true,
     "request_logs": true,
     "chat_history": true
@@ -384,6 +386,26 @@ user-panel:
 { "error": "invalid_passkey", "message": "invalid passkey" }
 { "error": "invalid_body", "message": "username and passkey_id are required" }
 ```
+
+### PATCH `/me`
+
+仅修改 bearer token 所属用户的 `username` 和/或 `timezone`。`GET /user/capabilities` 返回 `capabilities.profile_edit: true`；字段缺失或为 false 时，客户端应隐藏编辑功能。
+
+```http
+PATCH /user/me
+Authorization: Bearer user.jwt.token
+Content-Type: application/json
+```
+
+```json
+{ "username": "alice-new", "timezone": "America/New_York" }
+```
+
+必须至少提供一个字段，字段名严格区分大小写。值必须为去除首尾空白后非空的字符串。用户名沿用现有用户校验及有效用户名唯一性规则；时区使用 repository 的 Go `time.LoadLocation` 校验。未提供的字段保持不变，空时区不会重置为默认值。
+
+未知字段、别名、null、错误类型、空请求体、非对象、无效 JSON 或尾随 JSON 返回 `400 invalid_body`。禁止 `id`、`user_id`、credits、password、email、审批/session 状态、MFA/passkey、计费倍率及周期限额设置。无效时区返回 `400 invalid_timezone`，重复用户名返回 `409 user_exists`。失败请求不会修改用户，即使同时包含合法编辑。请求体上限仍为 1 MiB，超出返回 `413 request_too_large`。
+
+成功返回 HTTP 200，结构与 `GET /me` 相同：`{ "status": "ok", "user": ... }`，包含 `timezone`。仅修改当前 token 所属用户，不签发 token 或 cookie，不修改 session version；改名后已有 bearer session 仍有效。密码、邮箱/安全状态、余额和限额配置保持不变。时区变更影响依赖时区的周期窗口计算，但不更改配置限额。缺失、无效、过期或已撤销 session 返回 401，待审批用户返回 `403 approval_pending`。
 
 ### GET `/me`
 

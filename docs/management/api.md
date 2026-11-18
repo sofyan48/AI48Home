@@ -24,6 +24,8 @@ The panel assets are embedded into the binary at build time. Use `/admin` for th
 
 Home examples usually use port `8327`. An explicit `-addr` takes precedence; otherwise Home uses `node.port` from `cluster.yaml`. The runtime config `server.port` is distributed to CPA nodes and does not configure the Home listener.
 
+User self-service profile editing is available through authenticated `PATCH /user/me`, limited strictly to `username` and `timezone`. The User API advertises `capabilities.profile_edit: true` via `/user/capabilities`; see the [profile contract](../user/api.md#patch-me). Management user updates and session/security behavior are unchanged.
+
 ## API Versions
 
 This reference uses the v8 Management API. `/v0/management` has been removed; retired endpoints return `404` without redirects. Migrate clients to `/v8/management` using the route and configuration mappings below: configuration bodies and several resource paths changed, so changing the prefix alone is insufficient.

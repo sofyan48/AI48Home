@@ -112,6 +112,7 @@ func Register(group *gin.RouterGroup, handler *Handler) {
 	group.GET("/models/accessible", handler.ListAccessibleModels)
 
 	group.GET("/me", handler.CurrentUser)
+	group.PATCH("/me", handler.UpdateCurrentUser)
 	group.GET("/request-logs", handler.ListCurrentUserRequestLogs)
 	group.GET("/analytics", handler.CurrentUserAnalytics)
 	group.GET("/billing/overview", handler.CurrentUserBillingOverview)

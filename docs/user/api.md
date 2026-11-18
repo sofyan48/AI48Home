@@ -166,6 +166,7 @@ The table below is extracted from the User API route group registered by `intern
 | `POST` | `/login/totp` |
 | `POST` | `/login/passkey` |
 | `GET` | `/me` |
+| `PATCH` | `/me` |
 | `PATCH` | `/password` |
 | `POST` | `/password` |
 | `POST` | `/password/forgot` |
@@ -224,6 +225,7 @@ Example response:
     "email_registration": true,
     "email_verification": true,
     "password_recovery": true,
+    "profile_edit": true,
     "model_catalog": true,
     "request_logs": true,
     "chat_history": true
@@ -384,6 +386,26 @@ Common errors:
 { "error": "invalid_passkey", "message": "invalid passkey" }
 { "error": "invalid_body", "message": "username and passkey_id are required" }
 ```
+
+### PATCH `/me`
+
+Edits only the bearer-authenticated user's `username` and/or `timezone`. `GET /user/capabilities` advertises `capabilities.profile_edit: true`; clients should hide editing when the flag is absent or false.
+
+```http
+PATCH /user/me
+Authorization: Bearer user.jwt.token
+Content-Type: application/json
+```
+
+```json
+{ "username": "alice-new", "timezone": "America/New_York" }
+```
+
+At least one exact, case-sensitive field is required. Values must be non-empty strings after trimming surrounding whitespace. Username follows existing user validation and active-username uniqueness rules; timezone uses the repository's Go `time.LoadLocation` validation. Omitted fields remain unchanged; empty timezone does not reset to the default.
+
+Unknown fields, aliases, nulls, wrong types, empty/non-object/malformed bodies, and trailing JSON are rejected with HTTP 400 `invalid_body`. This includes ownership selectors (`id`, `user_id`), credits, password, email, approval/session state, MFA/passkeys, billing multipliers, and period-limit settings. Invalid timezone returns `400 invalid_timezone`; a duplicate username returns `409 user_exists`. Failed requests do not mutate the user, including when combined with valid edits. The usual 1 MiB body limit applies (`413 request_too_large`).
+
+Success returns HTTP 200 with the same `{ "status": "ok", "user": ... }` profile shape as `GET /me`, including `timezone`. Only the current token owner's record is updated. No token or cookie is issued, session version is unchanged, and existing bearer sessions remain valid after a username change. Password, email/security state, credits, and limit configuration are preserved. Timezone changes affect timezone-dependent period-window evaluation, not the configured limits. Missing/invalid/expired/revoked sessions return 401; pending users return `403 approval_pending`.
 
 ### GET `/me`
 

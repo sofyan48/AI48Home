@@ -13,6 +13,7 @@ type userCapabilitiesPayload struct {
 		EmailRegistration bool `json:"email_registration"`
 		EmailVerification bool `json:"email_verification"`
 		PasswordRecovery  bool `json:"password_recovery"`
+		ProfileEdit       bool `json:"profile_edit"`
 		ModelCatalog      bool `json:"model_catalog"`
 		RequestLogs       bool `json:"request_logs"`
 		TopupApproval     bool `json:"topup_approval"`
@@ -43,6 +44,9 @@ func TestUserCapabilitiesReflectUsableConfiguration(t *testing.T) {
 			}
 			// The catalog is served from the model registry, so it stays
 			// advertised on a Home that cannot send mail at all.
+			if !body.Capabilities.ProfileEdit {
+				t.Error("profile_edit = false, want true")
+			}
 			if !body.Capabilities.TopupApproval {
 				t.Error("topup_approval = false, want true")
 			}

@@ -24,6 +24,8 @@ Panel assets 会在构建时内嵌到二进制中。管理员入口使用 `/admi
 
 Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 使用 `cluster.yaml` 中的 `node.port`。runtime config 的 `server.port` 仅下发给 CPA 节点，不参与 Home 监听端口配置。
 
+用户可通过需认证的 `PATCH /user/me` 自助修改资料，仅允许 `username` 和 `timezone`。`/user/capabilities` 返回 `capabilities.profile_edit: true`；详见 [资料编辑契约](../user/api_CN.md#patch-me)。管理员用户更新与 session/安全行为保持不变。
+
 ## API 版本
 
 本文介绍 v8 Management API。`/v0/management` 已移除，旧接口返回 `404`，不提供重定向。请按文末的路由和配置映射迁移至 `/v8/management`；配置请求体及部分资源路径也已改变，不能只替换 URL 前缀。
