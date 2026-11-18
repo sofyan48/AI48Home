@@ -19,7 +19,7 @@ AI48Home manages the control plane; CLIProxyAPI gateways handle AI API requests.
 
 ## AI48Home and AI48HomeUI
 
-AI48Home provides the backend service, and [AI48HomeUI](https://github.com/sofyan48/AI48HomeUI) (the AI48Hub panel) provides the Web interface. **The two projects are maintained separately. AI48Home releases and images embed AI48HomeUI so they can be deployed and updated together.**
+AI48Home provides the backend service, and [AI48HomeUI](https://github.com/sofyan48/AI48HomeUI) (the AI48Home panel) provides the Web interface. **The two projects are maintained separately. AI48Home releases and images embed AI48HomeUI so they can be deployed and updated together.**
 
 ### Deploying an official release
 
