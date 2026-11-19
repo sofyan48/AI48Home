@@ -145,6 +145,7 @@ The following v8 routes are derived from `internal/managementhttp/routes_v8.go` 
 | `GET` | `/billing/settings/diagnostics` |
 | `GET` | `/capabilities` |
 | `POST` | `/certificates/clients` |
+| `GET` | `/channel-group-credential-candidates` |
 | `GET` | `/channel-group-details` |
 | `POST` | `/channel-group-details` |
 | `DELETE` | `/channel-group-details/:id` |
@@ -441,6 +442,8 @@ The config endpoints also accept the fields below. All values are database-backe
 `oauth.settings.<provider>[]` overrides `max-context-length` for OAuth models and is applied after exclusions and aliases, before prefixes. An entry matching an `alias` takes precedence over one matching the original `name`. API-key models are not affected.
 
 `connection-pool` is opt-in: an empty `connection-pool: {}` enables CPA defaults (`idle-conn-timeout: 300s`, `max-idle-conns-per-host: 2`). Fields are `enabled`, `idle-conn-timeout`, and `max-idle-conns-per-host`. Per-key values override the group; omitted or `null` fields inherit, and `enabled: false` opts a key out. The effective options travel with each dispatched credential; Home itself never opens these pools.
+
+For all eight API-key families, V8 reads and YAML exports preserve the submitted group membership, pool defaults and individual overrides. A read after a write distinguishes an omitted block, `null`, `{}`, and explicit fields such as `enabled: false` or `max-idle-conns-per-host: 0`. Older credentials whose original grouping was already flattened keep their existing representation until an operator explicitly submits their groups. Credential IDs, rotated keys and deletions follow the current database records.
 
 Explicit `true`/`false` values of `api-keys.vertex[].models[].openapi` and `oauth.model-alias.vertex[].openapi` are projected into the dispatched credential's `vertex_model_openapi` attribute; omitted or `null` keeps CPA's automatic routing. Credential-level rules take precedence over OAuth alias rules, and alias rules do not affect API-key credentials. Removing a setting drops the projection on the next dispatch or refresh without rewriting stored credentials. Malformed credential execution options fail synthesis, dispatch, or refresh instead of being silently dropped.
 
@@ -3035,6 +3038,7 @@ Response fields:
 | `capabilities.users` | boolean | Whether the `/users` user-management routes are available. |
 | `capabilities.topup_approval` | boolean | Self-topups require approval; pending user maps and `/users/:id/topup/approve` are available. Also advertised by the User API. |
 | `capabilities.access_groups` | boolean | Whether the `/channel-groups` and `/model-groups` access-scope routes are available. |
+| `capabilities.channel_group_credential_candidates` | boolean | Whether the binding editor can read the lightweight credential candidate list. |
 | `capabilities.user_period_limits` | boolean | Whether user period-limit configuration fields plus `GET /users/:id/period-limits` and `POST /users/:id/period-limits/reset` are available. |
 | `capabilities.credential_in_flight_snapshots` | boolean | Whether the independent CPA in-flight observation snapshot APIs are available. |
 | `capabilities.credential_in_flight_snapshot_cursor` | boolean | Whether `GET /credentials/in-flight` supports database-backed stable snapshot cursors for multi-page reads. |
@@ -3958,6 +3962,14 @@ Response:
 { "status": "ok" }
 ```
 
+### GET `/channel-group-credential-candidates`
+
+Lists OAuth and provider API-key identities for the binding editor. Each item has the canonical `auth_id` to submit, a display name and optional `provider` and `state`. Deleted and noncanonical records are excluded. Disabled and temporarily unavailable credentials carry their state so the editor can explain why they cannot be selected.
+
+```json
+{ "credential_candidates": [{ "auth_id": "auth-db-id", "display_name": "Team A", "provider": "codex" }] }
+```
+
 ### GET `/channel-group-details`
 
 Lists channel group detail rows.
@@ -3968,6 +3980,7 @@ Query parameters:
 | --- | --- | --- |
 | `channel_group_id` | integer | Filter by group ID. Aliases: `channel-group-id`, `group_id`, `group-id`. |
 | `auth_id` | string | Filter by auth ID. Alias: `auth-id`. |
+| `include` | string | Set to `credential` to include a credential summary on each binding. |
 
 Example response:
 
@@ -3986,7 +3999,13 @@ Example response:
 }
 ```
 
+With `include=credential`, each row gains a `credential` object with the same fields as a candidate. The stored binding `auth_id` must match the credential's `uuid`, `id` and `index` exactly. The display name prefers the credential label, then the compatibility provider name, with email labels masked. An unnamed credential uses its original ID. Optional state in priority order is `deleted`, `disabled`, or `unavailable`. An absent state means none of those flags apply. Dispatch also depends on the request and runtime policies. Credential deletion is independent of the binding row's `deleted_at`.
+
+A completed lookup with no confirmed identity returns `credential: null`. If the metadata lookup fails, the server still returns the binding rows, omits their `credential` fields and sets the top-level `credential_metadata_unavailable: true`. A basic request or an older server that ignores the parameter returns the original shape.
+
 ### GET `/channel-group-details/:id`
+
+Supports the same `include=credential` parameter and metadata states as the list.
 
 Returns one detail row:
 
@@ -4374,6 +4393,7 @@ The following paths use the v8 config layout. `/config` and `/config.yaml` suppo
 | `requests.payload.default-raw` | array of `PayloadRule` | Sets missing raw JSON payload params. |
 | `requests.payload.override` | array of `PayloadRule` | Overrides JSON payload params. |
 | `requests.payload.override-raw` | array of `PayloadRule` | Overrides raw JSON payload params. |
+| `requests.payload.replace` | array of `PayloadReplaceRule` | Ordered literal or Go RE2 replacements in selected message text or existing string fields; executed by CPA. |
 | `requests.payload.filter` | array of `PayloadFilterRule` | Removes JSON payload paths. |
 
 Guardian selection history is database-backed and shared across Home nodes, config reloads, and restarts. Only successful dispatch/admission while `session-affinity-subagents` is enabled advances selection order; completion/usage reports and parent lookups do not. When disabled, dispatch keeps ordinary sticky bindings but stops maintaining Guardian history and removes the touched binding from that history. Re-enabling resumes recording subsequent selections; selections made while disabled are not reconstructed. Inherited credentials must still belong to the current request's eligible candidate set. Guardian bindings may reuse a lower-priority eligible credential; cold selection still uses normal priority rules. Fork/compaction requests do not use Guardian cross-model inheritance. Schema version 19 adds the Guardian columns and lookup index through the normal startup migration. Version 18 portable snapshots remain supported. Expiring selection metadata and internal per-session counters use the existing `session_affinity` table, without a separate table (all excluded from portable snapshots); pre-upgrade bindings acquire selection metadata on their next successful dispatch. Upgrade all Home nodes before relying on cross-node Guardian inheritance.
@@ -4445,6 +4465,14 @@ Payload nested structure:
       "reasoning.effort": "high"
     }
   },
+  "PayloadReplaceRule": {
+    "models": [{ "name": "*", "protocol": "claude", "from-protocol": "openai" }],
+    "target": { "role": "user", "positions": [1, 2] },
+    "replacements": [
+      { "you are hero": "you are fool" },
+      { "remove this phrase": "" }
+    ]
+  },
   "PayloadFilterRule": {
     "models": [
       { "name": "gpt-*", "protocol": "responses" }
@@ -4468,6 +4496,33 @@ Payload nested structure:
     "not-exist": ["json.path"]
   }
 }
+```
+
+Use `PUT /config/requests/payload/replace` with a rule array to replace this section, or `PATCH /config/requests/payload` with `{"replace": [...]}` to preserve sibling sections. Home validates and stores the rules without applying them; upgrade downstream CPA nodes to v8.0.77 or later before using regex, `system`/`developer` roles, or path targets.
+
+- **Role target:** Set `target.role` to `user`, `system`, or `developer` and choose positive, one-based `positions` within that role or `all: true`, not both. Roles refer to the final upstream request: a top-level system instruction counts as one message, and developer text merged into system must be selected as `system`. Each message text block is processed independently; images, tool results, and thinking blocks are not modified by role targets.
+- **Path target:** Set `target.paths` to a non-empty list of gjson-style paths relative to the provider payload root. Do not combine it with `role`, `positions`, or `all`. Only existing string fields are edited, regardless of role. Missing and non-string values are skipped; objects and arrays are not traversed recursively. Each resolved path is processed at most once per rule.
+- **Replacements:** Each entry is either a case-sensitive literal pair such as `{"old label":"new label"}` (non-empty source), or a Go RE2 pair such as `{"pattern":"(item)-([0-9]+)","replacement":"${1}_${2}"}`. An empty destination deletes matches. CPA skips an invalid regex entry with a warning and still runs the other entries. Structurally invalid rules are rejected before database writes.
+
+Rules and their replacements run in list order after overrides and before filters. Model conditions use the same fields as other payload rules.
+
+Example `PUT /config/requests/payload/replace` body: this Codex rule targets every function tool's `description` and the `metadata.description` field. It applies literal replacements and deletions, rewrites `User-42` as `account-42`, and removes `<debug>...</debug>` blocks, including multiline blocks.
+
+```json
+[
+  {
+    "models": [{ "name": "*", "protocol": "codex" }],
+    "target": {
+      "paths": ["tools.#(type==\"function\")#.description", "metadata.description"]
+    },
+    "replacements": [
+      { "old name": "new name" },
+      { "remove this phrase": "" },
+      { "pattern": "(?i)user-(\\d+)", "replacement": "account-${1}" },
+      { "pattern": "(?s)<debug>.*?</debug>", "replacement": "" }
+    ]
+  }
+]
 ```
 
 `PayloadModelRule` fields:

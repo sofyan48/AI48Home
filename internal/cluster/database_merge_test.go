@@ -21,6 +21,9 @@ func TestMergedSchemaUpgradesBothHistories(t *testing.T) {
 		{"upstream17", 17, databaseSnapshotV17Models, false},
 		{"local18", 18, databaseSnapshotLocalV18Models, true},
 		{"upstream19", 19, databaseSnapshotUpstreamV18Models, false},
+		{"local20", 20, databaseSnapshotV20Models, true},
+		{"upstream20", 20, withUsageModel[UsageRecord](databaseSnapshotUpstreamV18Models), false},
+		{"local21", 21, databaseSnapshotV21Models, true},
 	} {
 		t.Run(history.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -123,7 +126,7 @@ func TestMergedSnapshotHistoriesRoundTrip(t *testing.T) {
 	}
 	for version := 6; version <= currentDatabaseVersion; version++ {
 		for _, upstream := range []bool{false, true} {
-			collision := version >= 7 && version <= 13 || version == 18
+			collision := version >= 7 && version <= 13 || version == 18 || version == 20
 			if upstream && !collision {
 				continue
 			}
@@ -131,6 +134,8 @@ func TestMergedSnapshotHistoriesRoundTrip(t *testing.T) {
 				models, _ := databaseSnapshotModels(version)
 				if upstream && version == 18 {
 					models = databaseSnapshotUpstreamV18Models
+				} else if upstream && version == 20 {
+					models = withUsageModel[UsageRecord](databaseSnapshotUpstreamV18Models)
 				} else if upstream {
 					models = databaseSnapshotV6Models
 				}
@@ -196,7 +201,7 @@ func TestMergedSnapshotHistoriesRoundTrip(t *testing.T) {
 }
 
 func TestMergedSnapshotRejectsMislabeledHistory(t *testing.T) {
-	for _, version := range []int{7, 8, 9, 10, 11, 12, 13, 18} {
+	for _, version := range []int{7, 8, 9, 10, 11, 12, 13, 18, 20} {
 		local, _ := databaseSnapshotModels(version)
 		manifest := DatabaseSnapshotManifest{FormatVersion: version}
 		for _, model := range local {

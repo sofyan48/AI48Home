@@ -429,19 +429,22 @@ func OpenDatabaseSnapshot(ctx context.Context, path string) (*ValidatedDatabaseS
 	}, nil
 }
 
-// Versions 7..13 and 18 were independently assigned by the local and upstream
+// Versions 7..13, 18, and 20 were independently assigned by the local and upstream
 // histories. Local archives always include the redemption table, even when it
 // has no rows. Select a frozen registry before validating the full entry set and
 // row shapes; never relax unknown-field or extra-table validation to accommodate
 // a collision.
 func databaseSnapshotManifestModels(manifest DatabaseSnapshotManifest) ([]databaseModel, bool) {
 	version := manifest.FormatVersion
-	if version >= 7 && version <= 13 || version == 18 {
+	if version >= 7 && version <= 13 || version == 18 || version == 20 {
 		if databaseSnapshotManifestHasTable(manifest, "codex_reset_redemptions") {
 			return databaseSnapshotModels(version)
 		}
 		if version == 18 {
 			return databaseSnapshotUpstreamV18Models, true
+		}
+		if version == 20 {
+			return withUsageModel[UsageRecord](databaseSnapshotUpstreamV18Models), true
 		}
 		return databaseSnapshotV6Models, true
 	}

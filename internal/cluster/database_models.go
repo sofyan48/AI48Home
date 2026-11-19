@@ -12,7 +12,8 @@ import (
 // or snapshot format change, and retain mappings for prior snapshot formats.
 // Local v18 and upstream v18/v19 were assigned independently; v20 merges both.
 // v21 adds user playground chat conversations.
-const currentDatabaseVersion = 21
+// v22 adds upstream usage plugin delivery tracking (upstream v20).
+const currentDatabaseVersion = 22
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -657,7 +658,12 @@ var databaseSnapshotLocalV18Models = databaseSnapshotLocalV18ModelRegistry()
 var databaseSnapshotUpstreamV18Models = databaseSnapshotUpstreamV18ModelRegistry()
 
 // databaseSnapshotV20Models freezes the merged v20 format before chat conversations.
-var databaseSnapshotV20Models = withCurrentUsageModel(databaseSnapshotLocalV18Models)
+var databaseSnapshotV20Models = withUsageModel[databaseSnapshotV19UsageRecord](databaseSnapshotLocalV18Models)
+
+// databaseSnapshotV21Models freezes the chat format before plugin delivery tracking.
+var databaseSnapshotV21Models = append(append([]databaseModel(nil), databaseSnapshotV20Models...),
+	newDatabaseModel[UserChatConversationRecord]("user_chat_conversation", []string{"user_id", "id"}, false, true),
+)
 
 // homeDatabaseModels is the current format.
 var homeDatabaseModels = currentDatabaseModels()
@@ -785,20 +791,18 @@ func databaseSnapshotLocalV18ModelRegistry() []databaseModel {
 }
 
 func databaseSnapshotUpstreamV18ModelRegistry() []databaseModel {
-	return withCurrentUsageModel(databaseSnapshotV17Models)
+	return withUsageModel[databaseSnapshotV19UsageRecord](databaseSnapshotV17Models)
 }
 
 func currentDatabaseModels() []databaseModel {
-	return append(append([]databaseModel(nil), databaseSnapshotV20Models...),
-		newDatabaseModel[UserChatConversationRecord]("user_chat_conversation", []string{"user_id", "id"}, false, true),
-	)
+	return withUsageModel[UsageRecord](databaseSnapshotV21Models)
 }
 
-func withCurrentUsageModel(source []databaseModel) []databaseModel {
+func withUsageModel[T any](source []databaseModel) []databaseModel {
 	models := append([]databaseModel(nil), source...)
 	for index := range models {
 		if models[index].name == "usage" {
-			models[index] = newDatabaseModel[UsageRecord]("usage", []string{"id"}, true, true)
+			models[index] = newDatabaseModel[T]("usage", []string{"id"}, true, true)
 			break
 		}
 	}
@@ -843,6 +847,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotUpstreamV18Models, true
 	case 20:
 		return databaseSnapshotV20Models, true
+	case 21:
+		return databaseSnapshotV21Models, true
 	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:

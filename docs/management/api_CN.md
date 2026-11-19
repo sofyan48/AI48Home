@@ -145,6 +145,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/billing/settings/diagnostics` |
 | `GET` | `/capabilities` |
 | `POST` | `/certificates/clients` |
+| `GET` | `/channel-group-credential-candidates` |
 | `GET` | `/channel-group-details` |
 | `POST` | `/channel-group-details` |
 | `DELETE` | `/channel-group-details/:id` |
@@ -440,6 +441,8 @@ Home 在数据库和下发配置中保留兼容的
 `oauth.settings.<provider>[]` 覆盖 OAuth 模型的 `max-context-length`，在排除规则和别名之后、前缀之前应用。匹配 `alias` 的条目优先于匹配原名 `name` 的条目。不影响 API Key 模型。
 
 `connection-pool` 需显式启用：空块 `connection-pool: {}` 使用 CPA 默认值（`idle-conn-timeout: 300s`、`max-idle-conns-per-host: 2`）。字段为 `enabled`、`idle-conn-timeout`、`max-idle-conns-per-host`。单 Key 配置覆盖组配置；缺失或 `null` 的字段继承组值，`enabled: false` 表示该 Key 禁用。有效配置随凭证下发，Home 自身不创建连接池。
+
+八类 API Key 的 V8 回读和 YAML 导出都会保留提交时的组成员、分组连接池和单 Key 覆盖。可以区分字段缺省、`null`、`{}`、显式的 `enabled: false` 和 `max-idle-conns-per-host: 0`。旧凭据若已丢失原始分组，会保留现有表示，直到用户重新提交分组。凭据 ID、轮换后的密钥和删除状态均以数据库中的当前记录为准。
 
 `api-keys.vertex[].models[].openapi` 和 `oauth.model-alias.vertex[].openapi` 的显式 `true`/`false` 会在凭证下发时投影到 `vertex_model_openapi` 属性；未设置或 `null` 时保留 CPA 的自动路由。凭证级规则优先于 OAuth 别名规则，别名规则不影响 API Key 凭证。删除设置后，下次派发或刷新即不再携带该投影，无需重写数据库凭证。凭证执行选项格式损坏时，合成、派发或刷新会明确失败，不会静默丢弃。
 
@@ -3025,6 +3028,7 @@ Home 管理的 CPA 使用数据库支持的 observation 配置。`credentials.in
 | `capabilities.users` | boolean | 是否支持 `/users` 用户管理路由。 |
 | `capabilities.topup_approval` | boolean | 自助充值需要批准，支持待批准用户字段和 `/users/:id/topup/approve`；用户能力 API 也声明此字段。 |
 | `capabilities.access_groups` | boolean | 是否支持 `/channel-groups` 与 `/model-groups` 访问范围路由。 |
+| `capabilities.channel_group_credential_candidates` | boolean | 添加凭证范围绑定时可读取轻量候选列表。 |
 | `capabilities.user_period_limits` | boolean | 是否支持用户周期限额配置字段，以及 `GET /users/:id/period-limits` 和 `POST /users/:id/period-limits/reset`。 |
 | `capabilities.credential_in_flight_snapshots` | boolean | 是否支持独立的 CPA in-flight observation snapshot 接口。 |
 | `capabilities.credential_in_flight_snapshot_cursor` | boolean | `GET /credentials/in-flight` 是否支持数据库支持的稳定 snapshot cursor 多页读取。 |
@@ -3942,6 +3946,14 @@ Channel groups 限制某个客户端 API key 可以使用哪些 auth records。�
 { "status": "ok" }
 ```
 
+### GET `/channel-group-credential-candidates`
+
+列出可供绑定编辑器展示的 OAuth 凭证和提供商 API 密钥。每项具有可直接作为绑定 `auth_id` 提交的规范 ID、显示名称、可选的 `provider` 和 `state`。已删除的凭证和身份不一致的旧记录会被排除。已禁用或暂不可用的凭证带有状态，可用于解释为何无法选择。
+
+```json
+{ "credential_candidates": [{ "auth_id": "auth-db-id", "display_name": "Team A", "provider": "codex" }] }
+```
+
 ### GET `/channel-group-details`
 
 列出 channel group detail rows。
@@ -3952,6 +3964,7 @@ Query 参数：
 | --- | --- | --- |
 | `channel_group_id` | integer | 按 group ID 过滤；也接受 `channel-group-id`、`group_id`、`group-id`。 |
 | `auth_id` | string | 按 auth ID 过滤；也接受 `auth-id`。 |
+| `include` | string | 传入 `credential` 时附带每条绑定的凭证摘要。 |
 
 输出示例：
 
@@ -3970,7 +3983,13 @@ Query 参数：
 }
 ```
 
+带上 `include=credential` 时，每行增加 `credential`，对象字段与候选列表相同。仅当绑定的原始 `auth_id` 与凭证表的 `uuid`、`id` 和 `index` 完全一致时才解析。名称优先取凭证标签，其次为兼容提供商名称，邮箱标签会脱敏，缺少名称时显示原始 ID。状态按优先级为 `deleted`、`disabled`、`unavailable`，未设置表示没有这些标记；调度还取决于请求与运行时策略。凭证的删除状态独立于绑定行的 `deleted_at`。
+
+已完成查询但无法确认身份时，`credential` 为 `null`。若摘要查询出错，仍返回绑定行，同时省略各行的 `credential` 并在响应顶层设置 `credential_metadata_unavailable: true`。未请求摘要或旧版服务忽略该参数时，响应沿用基础格式。
+
 ### GET `/channel-group-details/:id`
+
+支持与列表接口相同的 `include=credential` 参数和摘要状态。
 
 返回单个 detail row：
 
@@ -4358,6 +4377,7 @@ Query 参数：
 | `requests.payload.default-raw` | array of `PayloadRule` | 设置缺失的 raw JSON payload params。 |
 | `requests.payload.override` | array of `PayloadRule` | 覆盖 JSON payload params。 |
 | `requests.payload.override-raw` | array of `PayloadRule` | 覆盖 raw JSON payload params。 |
+| `requests.payload.replace` | array of `PayloadReplaceRule` | 由 CPA 按顺序对选中的消息文本或已有字符串字段执行字面量或 Go RE2 正则替换。 |
 | `requests.payload.filter` | array of `PayloadFilterRule` | 移除 JSON payload paths。 |
 
 Guardian 选择历史存入数据库，跨 Home 节点、配置重载和重启共享。只有在开启 `session-affinity-subagents` 时成功派发／并发准入才更新选择顺序；完成／usage 回报及父绑定查询不更新顺序。关闭后仍保留普通粘性绑定，但不再维护 Guardian 历史，并将本次使用的绑定从该历史中移除。重新开启后从后续成功选择继续记录，不回补关闭期间的选择。继承的凭证仍必须属于当前请求的合格候选集合。Guardian 可复用仍合格的低优先级凭证；冷启动选择仍遵循普通优先级规则。fork／compaction 不走 Guardian 跨模型继承。数据库版本 19 通过正常启动迁移新增 Guardian 字段及查询索引，并继续支持 v18 可移植快照。会过期的选择元数据及内部会话计数器记录存于现有 `session_affinity` 表内，不新增独立表（均不纳入可移植快照）；升级前的绑定在下一次成功派发时补充选择元数据。需升级全部 Home 节点后再依赖跨节点 Guardian 继承。
@@ -4429,6 +4449,14 @@ Payload 嵌套结构：
       "reasoning.effort": "high"
     }
   },
+  "PayloadReplaceRule": {
+    "models": [{ "name": "*", "protocol": "claude", "from-protocol": "openai" }],
+    "target": { "role": "user", "positions": [1, 2] },
+    "replacements": [
+      { "you are hero": "you are fool" },
+      { "remove this phrase": "" }
+    ]
+  },
   "PayloadFilterRule": {
     "models": [
       { "name": "gpt-*", "protocol": "responses" }
@@ -4452,6 +4480,33 @@ Payload 嵌套结构：
     "not-exist": ["json.path"]
   }
 }
+```
+
+可使用 `PUT /config/requests/payload/replace` 提交规则数组，或使用 `PATCH /config/requests/payload` 提交 `{"replace": [...]}` 并保留其他规则段。Home 只校验、保存和下发规则，不执行替换；使用正则、`system`/`developer` 角色或路径目标前，请先将下游 CPA 节点升级到 v8.0.77 或更新版本。
+
+- **角色目标：** `target.role` 支持 `user`、`system`、`developer`。填写该角色从 1 开始的 `positions`，或使用 `all: true`，两者互斥。角色以最终上游请求为准：顶层系统指令算一条消息；如果翻译时将 developer 内容合并进 system，请选 `system`。角色目标逐个处理消息文本块，不修改图片、工具结果或思考内容。
+- **路径目标：** `target.paths` 是相对于提供商请求体根节点的非空 gjson 风格路径列表，不能与 `role`、`positions` 或 `all` 一起使用。只替换已存在的字符串，不区分角色；跳过缺失或非字符串的值，不递归遍历对象或数组。同一规则中解析到的每条路径最多处理一次。
+- **替换项：** 可使用区分大小写的字面量映射（例如 `{"old label":"new label"}`，源字符串不能为空），或 Go RE2 正则（例如 `{"pattern":"(item)-([0-9]+)","replacement":"${1}_${2}"}`）。替换值为空字符串时删除匹配内容。无效正则只跳过该项并由 CPA 记录警告，不影响其他替换项；结构非法的规则在写入数据库前被拒绝。
+
+规则及其替换项均按列表顺序执行，位于 override 之后、filter 之前。模型匹配条件与其他 payload 规则一致。
+
+`PUT /config/requests/payload/replace` 请求体示例：这条 Codex 规则选中每个函数工具的 `description`，以及 `metadata.description` 字段。它依次执行字面量替换和删除，将 `User-42` 改为 `account-42`，并删除 `<debug>...</debug>` 块（包括跨行的块）。
+
+```json
+[
+  {
+    "models": [{ "name": "*", "protocol": "codex" }],
+    "target": {
+      "paths": ["tools.#(type==\"function\")#.description", "metadata.description"]
+    },
+    "replacements": [
+      { "old name": "new name" },
+      { "remove this phrase": "" },
+      { "pattern": "(?i)user-(\\d+)", "replacement": "account-${1}" },
+      { "pattern": "(?s)<debug>.*?</debug>", "replacement": "" }
+    ]
+  }
+]
 ```
 
 `PayloadModelRule` 字段：
