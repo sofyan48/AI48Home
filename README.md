@@ -15,7 +15,37 @@ Instead of managing each gateway independently, AI48Home centralizes configurati
 - **Coordinated credential scheduling**: Home schedules and distributes credentials to connected gateways, keeping credential selection centrally managed as the deployment grows.
 - **Shared control-plane state**: Use PostgreSQL when running multiple active Home instances; a single Home instance can use SQLite and still manage multiple CLIProxyAPI gateways.
 
-AI48Home manages the control plane; CLIProxyAPI gateways handle AI API requests. Use an ingress, reverse proxy, or load balancer in front of the gateways to distribute incoming client traffic across nodes or clusters. Home's credential scheduling complements this traffic routing rather than replacing it.
+AI48Home manages the control plane; AI48Proxy workers handle AI API requests. Use an ingress, reverse proxy, or load balancer in front of the workers to distribute incoming client traffic across nodes or clusters. Home's credential scheduling complements this traffic routing rather than replacing it.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Client[API clients] --> Ingress[HTTP ingress or load balancer]
+    Ingress --> Worker1[AI48Proxy worker 1]
+    Ingress --> Worker2[AI48Proxy worker 2]
+    Worker1 --> Providers[Upstream AI providers]
+    Worker2 --> Providers
+    Worker1 <-->|RESP over mTLS| Home[AI48Home control plane]
+    Worker2 <-->|RESP over mTLS| Home
+    Home --> Database[Persistent PostgreSQL or SQLite database]
+    Admin[Admin and user panel] --> Home
+```
+
+AI48Home owns the database-backed control plane: credentials, model access,
+routing policy, worker enrollment, configuration snapshots, scheduling, usage,
+request-log ingestion, and management APIs. AI48Proxy is the execution plane:
+each worker receives Home-selected configuration and credentials, executes
+provider requests, exposes the client-compatible API, and reports usage and
+execution state back to Home over RESP with mTLS.
+
+Workers do not maintain an independent credential catalog or replace Home's
+management API. Every worker has its own enrollment identity and durable local
+reporting state. In the Helm topology, one Home replica is paired with two
+AI48Proxy replicas by default; Kubernetes Services, an optional Ingress, or a
+Gateway API HTTPRoute distribute client HTTP connections across Ready workers.
+Home's RESP/mTLS service remains an internal control-plane endpoint unless it is
+intentionally exposed.
 
 ## AI48Home and AI48HomeUI
 
@@ -51,14 +81,36 @@ docker compose -f docker-compose.sqlite.yml up -d
 
 Use `docker-compose.pgsql.yml` and `cluster.pgsql.example.yaml` for PostgreSQL. Pin a release with `AI48HOME_IMAGE=ghcr.io/sofyan48/ai48home:v1.2.0`.
 
-**Full cluster (PostgreSQL, Home, three CPA workers, Nginx)**
+**Full production cluster (PostgreSQL, Home, three AI48Proxy workers, Nginx)**
+
+Download the installer and run it as root:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/sofyan48/AI48Home/main/install.sh
-sudo bash install.sh deploy            # writes /opt/cliproxy-cluster and starts everything
-sudo bash install.sh upgrade           # pull the configured Home and worker images
-sudo bash install.sh upgrade edge      # switch to the newest panel build
+chmod +x install.sh
+sudo bash install.sh deploy            # initialize, pull images, enroll workers, start stack
+sudo bash install.sh status
+sudo bash install.sh logs ai48proxy-1
 ```
+
+Lifecycle and upgrade commands:
+
+```bash
+sudo bash install.sh start
+sudo bash install.sh stop
+sudo bash install.sh restart
+sudo bash install.sh upgrade           # pull configured Home and worker images
+sudo bash install.sh upgrade v1.2.0    # pin Home to a specific image tag
+sudo bash install.sh repair-worker 2   # replace worker 2 identity and JWT
+```
+
+The installer writes its production state under `/opt/cliproxy-cluster` by
+default. Set `BASE_DIR` when using another directory. It generates `.env`,
+imports the initial Home configuration once, issues distinct Home JWTs, and
+pulls the configured GHCR images; it does not build AI48Proxy locally. Keep
+`.env`, generated YAML, JWTs, database data, and worker identity data private.
+For source reload during development, use the separate development Compose
+instructions below.
 
 `install.sh` stores the Home image in `/opt/cliproxy-cluster/.env` as `HOME_IMAGE` and the worker image as `AI48PROXY_IMAGE`. Both images are pulled from GHCR; no worker image is built locally. Pin them before `deploy`, for example:
 

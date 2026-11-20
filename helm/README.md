@@ -138,7 +138,7 @@ The external database must already exist, and the user must have permissions to 
 
 The chart derives PostgreSQL environment variables and Home's `cluster.yaml` from `postgresql.auth` and `postgresql.external`. Do not set connection details only through `home.environment`: Home reads concrete database settings from `cluster.yaml`. The password is stored in a Secret, not the environment ConfigMap. `sslmode: require` encrypts the connection but does not verify server identity like `verify-full`.
 
-## Services (no Nginx)
+## Services and worker routing
 
 With release name `ai48home` and the default `fullnameOverride: ai48home`:
 
@@ -173,7 +173,7 @@ kubectl -n ai48home port-forward service/ai48home-worker 8317:8317
 
 Kubernetes Service balancing is connection-based, not Nginx `least_conn`. EndpointSlices track Ready workers as HPA changes replicas. New connections can reach available workers; existing keep-alive/streaming connections stay with their selected worker and cannot migrate when that pod terminates.
 
-Local forwarding is for debugging only. Even `kubectl port-forward service/...` selects one backing pod and may stop when that pod is replaced or removed. Opening a Service through a desktop tool may also use local forwarding; inspect the actual transport rather than assuming a localhost URL uses ClusterIP balancing. For production, access the Service from inside the cluster or through a configured Ingress/LoadBalancer. The chart can create an optional HTTP `Ingress` or Gateway API `HTTPRoute`; both are disabled by default. A `LoadBalancer` Service still requires a load-balancer implementation in the cluster.
+Local forwarding is for debugging only. Even `kubectl port-forward service/...` selects one backing pod and may stop when that pod is replaced or removed. Opening a Service through a desktop tool may also use local forwarding; inspect the actual transport rather than assuming a localhost URL uses ClusterIP balancing. For production, access the Service from inside the cluster or through a configured Ingress/LoadBalancer. The chart can create an optional HTTP `Ingress` or Gateway API `HTTPRoute`; both are disabled by default. A `LoadBalancer` Service still requires a load-balancer implementation in the cluster. The request path is Client → Ingress/Gateway/Service → AI48Proxy workers → upstream provider; workers use RESP/mTLS to reach the single AI48Home control plane, which persists state in PostgreSQL or SQLite.
 
 ## Ingress and Gateway API routing
 
