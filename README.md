@@ -56,13 +56,19 @@ Use `docker-compose.pgsql.yml` and `cluster.pgsql.example.yaml` for PostgreSQL. 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/sofyan48/AI48Home/main/install.sh
 sudo bash install.sh deploy            # writes /opt/cliproxy-cluster and starts everything
-sudo bash install.sh upgrade           # pull the newest image and replace Home only
+sudo bash install.sh upgrade           # pull the configured Home and worker images
 sudo bash install.sh upgrade edge      # switch to the newest panel build
 ```
 
-`install.sh` stores the image in `/opt/cliproxy-cluster/.env` as `HOME_IMAGE`; override it before `deploy` with `HOME_IMAGE=ghcr.io/sofyan48/ai48home:v1.2.0 sudo -E bash install.sh deploy`.
+`install.sh` stores the Home image in `/opt/cliproxy-cluster/.env` as `HOME_IMAGE` and the worker image as `AI48PROXY_IMAGE`. Both images are pulled from GHCR; no worker image is built locally. Pin them before `deploy`, for example:
 
-Open `http://<host>:8327/admin` for the admin console and `http://<host>:8327/app` for the user portal.
+```bash
+HOME_IMAGE=ghcr.io/sofyan48/ai48home:v1.2.0 \
+AI48PROXY_IMAGE=ghcr.io/sofyan48/ai48proxy:v0.1.0 \
+sudo -E bash install.sh deploy
+```
+
+Open `http://<host>:8327/admin` for the admin console and `http://<host>:8327/app` for the user portal. Client API traffic goes through `http://<host>:8317`.
 
 **Publishing images.** `.github/workflows/docker-image.yml` builds the panel from `sofyan48/AI48HomeUI`, embeds it, and pushes to GHCR using `GITHUB_TOKEN` (no extra secret). It runs on `v*` tags, on the `panel-updated` dispatch sent by AI48HomeUI, and manually from the Actions tab. After the first push, set the package visibility to **Public** under *Packages → ai48home → Package settings* so servers can pull without logging in.
 
@@ -168,6 +174,54 @@ helm uninstall ai48home -n ai48home
 Generated keys are reused on upgrades. Uninstall keeps worker PVCs; back up PostgreSQL and the `ai48home-config` Secret before deleting anything. To install from a source checkout instead of GHCR, use `./helm/ai48home` as the chart reference.
 
 See [helm/README.md](helm/README.md) for external PostgreSQL, StorageClass, autoscaling, migration from the old `cliproxy` chart, and troubleshooting.
+
+### Development Docker Compose
+
+For a full local Home + AI48Proxy stack, check out both repositories as
+siblings and run from the `AI48Home` root. The development Compose builds both
+images from source and uses separate development ports/state; it does not use
+the production installer or GHCR worker image.
+
+The Compose file expects the ignored local files `cluster.dev.yaml` and
+`config.dev.yaml` at the repository root. They are local operator files and must
+be created from the examples in this checkout or from your existing development
+configuration.
+
+Start PostgreSQL and build/start Home first:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build postgres
+
+docker compose -f docker-compose.dev.yml run --rm --no-deps \
+  -v "$PWD/config.dev.yaml:/workspace/config.yaml:ro" \
+  ai48home go run ./cmd/home -config /workspace/config.yaml -import
+
+docker compose -f docker-compose.dev.yml up -d --build ai48home
+```
+
+After Home is ready, issue a one-shot worker token with the development key and
+save it locally (the file is ignored by git):
+
+```bash
+curl -fsS -X POST \
+  -H 'X-MANAGEMENT-KEY: dev-management-key' \
+  -H 'Content-Type: application/json' \
+  --data '{"node_name":"ai48proxy-dev"}' \
+  http://127.0.0.1:8327/v8/management/certificates/clients \
+  | jq -er '.home_jwt' > home.jwt
+chmod 600 home.jwt
+docker compose -f docker-compose.dev.yml up -d --build ai48proxy
+```
+
+After the initial image build, the existing `.air.toml` reloads Home source
+changes, and `cargo watch` reloads AI48Proxy source changes. Rebuild only after
+changing `Dockerfile.dev` or the development toolchain.
+
+Home is available at `http://localhost:8327` and the single development worker
+is available directly at `http://localhost:8317`. `cluster.dev.yaml`,
+`config.dev.yaml`, `home.jwt`, `logs.dev/`, and `plugins.dev/` are intentionally
+ignored by git. Set
+`HOME_JWT_FILE` if the token is stored elsewhere.
 
 ### Developing both projects locally
 

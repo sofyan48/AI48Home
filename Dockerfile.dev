@@ -1,0 +1,15 @@
+FROM golang:1.26-bookworm
+
+WORKDIR /workspace
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential git ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && go install github.com/air-verse/air@v1.62.0
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+EXPOSE 8327
+
+CMD ["air", "-c", ".air.toml"]
