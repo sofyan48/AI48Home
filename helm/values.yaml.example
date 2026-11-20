@@ -31,6 +31,31 @@ secrets:
 bootstrap:
   image: python:3.13-alpine
 
+# Optional HTTP exposure. Keep Home disabled/private unless management is intentionally public.
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: ai48home.example.com
+      home:
+        path: /home
+        pathType: Prefix
+      worker:
+        path: /
+        pathType: Prefix
+  tls: []
+
+# Optional Gateway API HTTPRoute exposure. Requires Gateway API CRDs and an existing Gateway.
+gateway:
+  enabled: false
+  parentRefs: []
+  hostnames: []
+  home:
+    path: /home
+  worker:
+    path: /
+
 # Home always runs one replica with the Recreate strategy.
 home:
   image:
@@ -53,11 +78,11 @@ home:
 
 workers:
   image:
-    repository: eceasy/cli-proxy-api
-    tag: v8.0.4
+    repository: ghcr.io/sofyan48/ai48proxy
+    tag: latest
     pullPolicy: IfNotPresent
   # Used only when autoscaling.enabled is false.
-  replicas: 1
+  replicas: 2
   # Must exceed home.heartbeatTimeoutSeconds; adds 2 seconds per pod ordinal.
   startDelaySeconds: 25
   # Non-sensitive settings only; HOME_URL, TZ and delay are chart-managed.
@@ -79,7 +104,7 @@ workers:
     # Requires Metrics Server and Kubernetes 1.30+.
     # Set false to use workers.replicas without these requirements.
     enabled: true
-    minReplicas: 1
+    minReplicas: 2
     maxReplicas: 8
     targetCPUUtilizationPercentage: 70
     scaleDownStabilizationSeconds: 300

@@ -82,7 +82,7 @@ Every `v*` release publishes the Helm chart to GHCR, next to the Docker image:
 | `oci://ghcr.io/sofyan48/charts/ai48home:latest` | Latest `v*` release |
 | `ai48home-<version>.tgz`, `ai48home-latest.tgz` | GitHub release assets |
 
-The chart deploys one Home instance, a CPA worker StatefulSet with optional HPA, and optional internal PostgreSQL. Each chart version pins its Home image to the same release tag.
+The chart deploys one Home instance and two AI48Proxy worker replicas by default, each with its own enrollment identity/PVC, with optional HPA and internal PostgreSQL. Each chart version pins its Home image to the same release tag.
 
 **1. Write a private values file.** Keep it out of version control (`chmod 600`). The management key and gateway API key are optional: when left empty, the chart generates them on first install.
 
@@ -160,7 +160,7 @@ Services with the default `fullnameOverride: ai48home`:
 | `ai48home-home` | 8327 | Home Management HTTP, Web interface, and RESP/mTLS |
 | `ai48home-worker` | 8317 | Worker API traffic for clients |
 
-Port-forwarding is for debugging only. For production traffic, set `workers.service.type: LoadBalancer` or route an Ingress to `ai48home-worker`, and keep Home private unless you deliberately expose it.
+Port-forwarding is for debugging only. For production traffic, set `workers.service.type: LoadBalancer`, enable the chart's `ingress` or `gateway` routing, or configure an external Gateway/Ingress to `ai48home-worker`. Keep Home private unless you deliberately expose it. The chart supports optional HTTP Ingress and Gateway API HTTPRoute resources; both are disabled by default.
 
 **Upgrade and uninstall.**
 

@@ -1,6 +1,6 @@
 # AI48Home Helm deployment
 
-This chart follows the topology in `install.sh`: optional internal PostgreSQL, one AI48Home instance, and a configurable CPA worker pool. Workers run as a StatefulSet with optional HPA and automatic JWT enrollment. There is **no Nginx or headless Service**. The application Services expose Home on `8327` and workers on `8317`; enabling internal PostgreSQL adds its database Service.
+This chart follows the topology in `install.sh`: optional internal PostgreSQL, one AI48Home instance, and a configurable AI48Proxy worker pool. Workers run as a StatefulSet with optional HPA and automatic JWT enrollment. There is **no Nginx or headless Service**. The application Services expose Home on `8327` and workers on `8317`; enabling internal PostgreSQL adds its database Service.
 
 ## Requirements
 
@@ -149,7 +149,7 @@ With release name `ai48home` and the default `fullnameOverride: ai48home`:
 
 Without `fullnameOverride`, names are prefixed with `<release>-ai48home`, for example `ai48home-ai48home-home`.
 
-Workers use one regular Service; there is no headless Service or per-pod DNS discovery. StatefulSet names and per-worker PVC identities remain stable.
+The chart defaults to one Home replica and two AI48Proxy worker replicas. Each worker has its own PVC and enrollment identity; the regular worker Service balances HTTP connections across Ready workers. The worker image reads its persisted JWT from its own identity PVC. There is no headless Service or per-pod DNS discovery. StatefulSet names and per-worker PVC identities remain stable.
 
 When upgrading from the chart with a headless Service, `serviceName` changes and Kubernetes requires recreating the StatefulSet. Preserve pods and PVCs using `kubectl -n dev delete statefulset ai48home-workers --cascade=orphan`, then run Helm upgrade. Adjust the namespace and StatefulSet name for your release. Helm removes the obsolete headless Service.
 
@@ -173,7 +173,50 @@ kubectl -n ai48home port-forward service/ai48home-worker 8317:8317
 
 Kubernetes Service balancing is connection-based, not Nginx `least_conn`. EndpointSlices track Ready workers as HPA changes replicas. New connections can reach available workers; existing keep-alive/streaming connections stay with their selected worker and cannot migrate when that pod terminates.
 
-Local forwarding is for debugging only. Even `kubectl port-forward service/...` selects one backing pod and may stop when that pod is replaced or removed. Opening a Service through a desktop tool may also use local forwarding; inspect the actual transport rather than assuming a localhost URL uses ClusterIP balancing. For production, access the Service from inside the cluster or through a configured Ingress/LoadBalancer. This chart does not create an Ingress. A `LoadBalancer` Service requires a load-balancer implementation in the cluster.
+Local forwarding is for debugging only. Even `kubectl port-forward service/...` selects one backing pod and may stop when that pod is replaced or removed. Opening a Service through a desktop tool may also use local forwarding; inspect the actual transport rather than assuming a localhost URL uses ClusterIP balancing. For production, access the Service from inside the cluster or through a configured Ingress/LoadBalancer. The chart can create an optional HTTP `Ingress` or Gateway API `HTTPRoute`; both are disabled by default. A `LoadBalancer` Service still requires a load-balancer implementation in the cluster.
+
+## Ingress and Gateway API routing
+
+The chart supports two optional HTTP routing resources. Both route client API traffic to the worker Service and can route Home management/UI traffic separately. Home remains private by default.
+
+**Ingress:**
+
+```yaml
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: ai48.example.com
+      home:
+        path: /home
+        pathType: Prefix
+      worker:
+        path: /
+        pathType: Prefix
+  tls:
+    - secretName: ai48-tls
+      hosts: [ai48.example.com]
+```
+
+The `/home` path is sent to `ai48home-home`; `/` is sent to `ai48home-worker`. Use a separate hostname or stronger authentication before exposing the Home path publicly. HTTP Ingress does not carry Home RESP/mTLS traffic; workers must reach the in-cluster Home Service for enrollment and RESP.
+
+**Gateway API:**
+
+```yaml
+gateway:
+  enabled: true
+  parentRefs:
+    - name: shared-gateway
+      namespace: gateway-system
+  hostnames:
+    - api.example.com
+  home:
+    path: /home
+  worker:
+    path: /
+```
+
+This requires Gateway API CRDs and an existing Gateway listener accepting the hostname. The HTTPRoute backend ports are the Services' HTTP port 80; Home's RESP/mTLS port 8327 remains internal.
 
 ## Environment ConfigMaps and Secrets
 
@@ -236,9 +279,10 @@ Enable HPA for the worker StatefulSet (requires Metrics Server and Kubernetes 1.
 
 ```yaml
 workers:
+  replicas: 2
   autoscaling:
     enabled: true
-    minReplicas: 3
+    minReplicas: 2
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
     scaleDownStabilizationSeconds: 300
