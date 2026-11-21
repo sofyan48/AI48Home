@@ -2,7 +2,7 @@
 
 AI48Home-specific extension implemented in `internal/alerting/`. This document contains the detailed alerting contract linked from `api.md`.
 
-Home evaluates alert rules every `interval_seconds` by reading existing tables (`auth`, `quota_window`, `cpa_node`). Notifications are sent only on state transitions (firing, and resolved when `send_resolved` is true). When several Homes share a PostgreSQL database, a lease in `alert_lease` ensures only one Home evaluates and sends.
+Home evaluates alert rules every `interval_seconds` by reading existing tables (`auth`, `quota_window`, `cpa_node_membership`, `cpa_node`). Notifications are sent only on state transitions (firing, and resolved when `send_resolved` is true). When several Homes share a PostgreSQL database, a lease in `alert_lease` ensures only one Home evaluates and sends.
 
 All routes are under `/v8/management` and use the normal Management API authentication.
 
@@ -14,7 +14,7 @@ All routes are under `/v8/management` and use the normal Management API authenti
 | `credential_refresh` | Credential has `last_refresh_error` for at least `refresh_failure_minutes`. | `credential_refresh_enabled`, `refresh_failure_minutes` |
 | `credential_cooldown` | `next_retry_after` is at least `cooldown_minutes` in the future, or the cooldown has been observed for `cooldown_minutes`. | `credential_cooldown_enabled`, `cooldown_minutes` |
 | `quota_low` | A non-unlimited, unexpired quota window has `remaining_ratio <= quota_threshold_percent / 100`. One alert per credential window. | `quota_low_enabled`, `quota_threshold_percent` |
-| `node_offline` | A CPA node has not sent a heartbeat for `node_offline_seconds`. Nodes are remembered in `alert_nodes` because Home prunes stale `cpa_node` rows. | `node_offline_enabled`, `node_offline_seconds` |
+| `node_offline` | A Worker has not sent a subscription heartbeat for `node_offline_seconds`. Membership `last_seen_at` is authoritative when available; connection snapshot timestamps are a fallback for nodes without membership records. Active memberships are tracked even without a connection snapshot. Last-seen history in `alert_nodes` never moves backward and survives snapshot or membership removal. Closed memberships alone do not rediscover forgotten Workers. Alert titles use `Worker offline:`; rule keys and API fields remain unchanged. | `node_offline_enabled`, `node_offline_seconds` |
 
 Disabling a rule keeps its current alerts without sending resolved messages.
 
@@ -143,7 +143,7 @@ Manually resolves one currently firing alert. Send the exact `key` returned by t
 
 Response: `200 {"status":"ok"}`. Invalid JSON or a non-string key returns `400 invalid_body`; a missing, null, empty, or whitespace-only key returns `400 invalid_key`. Absent or nonfiring alerts return `404 alert_not_found`. Database/configuration errors return `500 alerting_alert_resolve_failed`.
 
-This is a **one-shot reset**, not acknowledgment or persistent suppression: it deletes only the selected firing state. A still-active condition can fire again on the next evaluation (subject to the rule's normal hold period). Other alerts and CPA node tracking are unchanged; use `DELETE /alerting/nodes/:node_id` separately to forget a decommissioned node.
+This is a **one-shot reset**, not acknowledgment or persistent suppression: it deletes only the selected firing state. A still-active condition can fire again on the next evaluation (subject to the rule's normal hold period). Other alerts and Worker tracking are unchanged; use `DELETE /alerting/nodes/:node_id` separately to forget a decommissioned node.
 
 When `send_resolved` is true, enabled channels receive a resolved notification with detail `Manually resolved by an operator.` only after successful deletion. When false, no notification is sent. Manual resolution works even when automatic evaluation or the rule is disabled. Notification delivery failures are logged, as for evaluation notifications; they do not restore the state or fail the successful reset.
 
@@ -155,4 +155,4 @@ Runs one evaluation immediately on this Home (ignores the lease). Response: `{"s
 
 ### `DELETE /alerting/nodes/:node_id`
 
-Stops tracking a decommissioned CPA node and clears its `node_offline` alert without a resolved message.
+Stops tracking a decommissioned Worker and clears its `node_offline` alert without a resolved message.

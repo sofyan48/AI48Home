@@ -39,6 +39,10 @@ This reference uses the v8 Management API. `/v0/management` has been removed; re
 
 The v8 configuration format declares `config-version: 8`. This is independent of Home's release tag and does not version the User API or the RESP protocol. The field reference below uses v8 YAML/JSON key paths; replace dots with slashes to address a config subtree through HTTP.
 
+## Worker Offline Alerts
+
+The `node_offline` rule uses subscription heartbeat timestamps from `cpa_node_membership`, not connection snapshot freshness. Snapshots remain a fallback for nodes without membership records. Active memberships are tracked without snapshots, and remembered last-seen timestamps never move backward. Alert titles use `Worker offline:`; API fields and rule keys are unchanged. See [Alerting](alerting.md) for details.
+
 ## Manual Alert Resolution
 
 `POST /alerting/alerts/resolve` (under `/v8/management`, using normal management authentication) accepts `{"key":"node_offline:node/a"}`. Pass the exact alert key in the JSON body to support slash-containing keys. Success returns `200 {"status":"ok"}`; invalid bodies/keys return `400`, absent or nonfiring alerts return `404 alert_not_found`, and database/configuration failures return `500 alerting_alert_resolve_failed`.

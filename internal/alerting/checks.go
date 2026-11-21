@@ -197,7 +197,7 @@ func remainingRatio(window cluster.QuotaWindowRecord) (float64, bool) {
 	return 0, false
 }
 
-// NodeSeen remembers the last heartbeat of every CPA node. Home prunes stale
+// NodeSeen remembers the last heartbeat of every Worker. Home prunes stale
 // cpa_node rows shortly after the heartbeat timeout, so offline detection
 // needs its own memory of nodes that disappeared.
 type NodeSeen struct {
@@ -211,12 +211,26 @@ func (NodeSeen) TableName() string { return "alert_nodes" }
 
 func nodeCandidates(ctx context.Context, db *gorm.DB, settings Settings, now time.Time) ([]candidate, error) {
 	var records []cluster.CPANodeRecord
-	errFind := db.WithContext(ctx).Select("node_id", "client_ip", "last_seen_at").Find(&records).Error
+	errFind := db.WithContext(ctx).Select("node_id", "client_ip", "certificate_fingerprint", "last_seen_at").Find(&records).Error
 	if errFind != nil {
 		return nil, fmt.Errorf("load cpa nodes: %w", errFind)
 	}
+	// Subscription pongs update membership liveness, independently of connection snapshots.
+	var memberships []cluster.CPANodeMembershipRecord
+	if errMemberships := db.WithContext(ctx).Find(&memberships).Error; errMemberships != nil {
+		return nil, fmt.Errorf("load worker memberships: %w", errMemberships)
+	}
+	byFingerprint := make(map[string]cluster.CPANodeMembershipRecord, len(memberships))
+	for _, membership := range memberships {
+		byFingerprint[strings.TrimSpace(membership.CertificateFingerprint)] = membership
+	}
 	latest := make(map[string]NodeSeen)
 	for _, record := range records {
+		if membership, ok := byFingerprint[strings.TrimSpace(record.CertificateFingerprint)]; ok {
+			// A fresh snapshot is not a heartbeat, including for canceled memberships.
+			record.NodeID = membership.NodeID
+			record.LastSeenAt = membership.LastSeenAt
+		}
 		nodeID := strings.TrimSpace(record.NodeID)
 		if nodeID == "" {
 			nodeID = strings.TrimSpace(record.ClientIP)
@@ -229,10 +243,30 @@ func nodeCandidates(ctx context.Context, db *gorm.DB, settings Settings, now tim
 		}
 		latest[nodeID] = NodeSeen{NodeID: nodeID, ClientIP: record.ClientIP, LastSeenAt: record.LastSeenAt.UTC(), UpdatedAt: now}
 	}
+	for _, membership := range memberships {
+		if membership.State != cluster.MembershipStateActive {
+			continue
+		}
+		nodeID := strings.TrimSpace(membership.NodeID)
+		if nodeID == "" {
+			continue
+		}
+		seen := latest[nodeID]
+		if !membership.LastSeenAt.After(seen.LastSeenAt) {
+			continue
+		}
+		seen.NodeID = nodeID
+		seen.LastSeenAt = membership.LastSeenAt.UTC()
+		seen.UpdatedAt = now
+		latest[nodeID] = seen
+	}
 	for _, seen := range latest {
 		errUpsert := db.WithContext(ctx).Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "node_id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"client_ip", "last_seen_at", "updated_at"}),
+			Where: clause.Where{Exprs: []clause.Expression{
+				clause.Expr{SQL: "excluded.last_seen_at >= alert_nodes.last_seen_at"},
+			}},
 		}).Create(&seen).Error
 		if errUpsert != nil {
 			return nil, fmt.Errorf("record cpa node heartbeat: %w", errUpsert)
@@ -262,7 +296,7 @@ func nodeCandidates(ctx context.Context, db *gorm.DB, settings Settings, now tim
 		detail += ")."
 		out = append(out, candidate{
 			Key: RuleNodeOffline + ":" + node.NodeID, Rule: RuleNodeOffline, Subject: node.NodeID,
-			Title: "CPA node offline: " + name, Detail: detail, Immediate: true,
+			Title: "Worker offline: " + name, Detail: detail, Immediate: true,
 		})
 	}
 	return out, nil

@@ -39,6 +39,10 @@ Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 
 
 v8 配置格式声明 `config-version: 8`。它与 Home 发布版本号独立，也不表示 User API 或 RESP 协议升级到 v8。下方字段参考使用 v8 YAML/JSON 配置键路径；通过 HTTP 访问子树时，将点号换成 `/`。
 
+## Worker 离线告警
+
+`node_offline` 规则使用 `cpa_node_membership` 中的订阅心跳时间，而不是连接快照的更新时间。仅在没有 membership 记录时回退到连接快照。没有快照的活动 membership 也会被跟踪，已记录的最后心跳时间不会倒退。告警标题使用 `Worker offline:`，API 字段和规则 key 保持不变。详见 [Alerting](alerting.md)。
+
 ## 手动解除告警
 
 `POST /alerting/alerts/resolve`（基础路径 `/v8/management`，使用正常的管理认证）接收 `{"key":"node_offline:node/a"}`。请将告警列表返回的完整 key 放在 JSON 请求体中，以支持包含 `/` 的 key。成功返回 `200 {"status":"ok"}`；无效请求体或 key 返回 `400`，不存在或尚未触发的告警返回 `404 alert_not_found`，数据库或配置错误返回 `500 alerting_alert_resolve_failed`。
