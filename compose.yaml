@@ -1,0 +1,109 @@
+# Local development stack: PostgreSQL + AI48Home + AI48Proxy, built from source
+# with hot reload. Requires AI48Proxy checked out next to this repository.
+#
+#   docker compose up            # from AI48Home or AI48Proxy
+#   docker compose down -v       # full reset (database, worker identity, caches)
+#
+# First start imports docker/dev/config.yaml into the empty database and enrolls
+# the worker automatically. Production uses docker-compose.{sqlite,pgsql}.yml and
+# AI48Proxy's install.sh instead.
+name: ai48home
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: ai48home-dev-postgres
+    environment:
+      POSTGRES_USER: ai48home
+      POSTGRES_PASSWORD: dev-only-password
+      POSTGRES_DB: ai48home
+    volumes:
+      - ai48home-dev-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai48home -d ai48home"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [ai48-dev]
+
+  ai48home:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: ai48home:dev
+    container_name: ai48home-dev
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HOME_USER_EMAIL_SMTP_PASSWORD: ""
+      HOME_DEV_DISABLE_MANAGEMENT_IP_BAN: "true"
+    ports:
+      - "${AI48HOME_PORT:-8327}:8327"
+    volumes:
+      - .:/workspace
+      - ai48home-dev-runtime:/srv/home
+      - ./docker/dev/cluster.yaml:/srv/home/cluster.yaml:ro
+      - ./docker/dev/config.yaml:/srv/home/config.yaml:ro
+      # Reuse the host module cache so the first start does not re-download everything.
+      - ${GOMODCACHE_HOST:-${HOME}/go/pkg/mod}:/go/pkg/mod
+      - ai48home-dev-gobuild:/root/.cache/go-build
+    networks: [ai48-dev]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H 'X-MANAGEMENT-KEY: dev-management-key' http://127.0.0.1:8327/v8/management/nodes >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      # The first start downloads modules and compiles Home; later starts are fast.
+      start_period: 600s
+      retries: 6
+
+  ai48proxy:
+    build:
+      context: ../AI48Proxy
+      dockerfile: Dockerfile.dev
+      args:
+        RUST_IMAGE: ${RUST_IMAGE:-rust:bookworm}
+    image: ai48proxy:dev
+    container_name: ai48proxy-dev
+    init: true
+    entrypoint: ["/bin/sh", "/dev-entrypoint.sh"]
+    command: []
+    environment:
+      AI48_DEV_HOME_URL: http://ai48home:8327
+      AI48_DEV_MANAGEMENT_KEY: dev-management-key
+      RUST_LOG: ${RUST_LOG:-ai48proxy=debug}
+      WORKER_START_DELAY: "0"
+    # Start immediately so `docker compose up` attaches logs right away; the
+    # entrypoint waits for Home itself instead of blocking Compose.
+    depends_on:
+      ai48home:
+        condition: service_started
+    ports:
+      - "${AI48PROXY_PORT:-8317}:8317"
+    volumes:
+      - ../AI48Proxy:/workspace
+      - ./docker/dev/proxy-entrypoint.sh:/dev-entrypoint.sh:ro
+      - ai48proxy-dev-state:/var/lib/ai48proxy
+      - ai48proxy-dev-target:/workspace/target
+      - ${CARGO_REGISTRY_HOST:-${HOME}/.cargo/registry}:/usr/local/cargo/registry
+    networks: [ai48-dev]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8317/healthz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      start_period: 300s
+      retries: 3
+
+volumes:
+  ai48home-dev-postgres:
+  ai48home-dev-runtime:
+
+  ai48home-dev-gobuild:
+  ai48proxy-dev-state:
+  ai48proxy-dev-target:
+
+
+networks:
+  ai48-dev:
+    name: ai48-dev-network
