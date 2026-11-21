@@ -188,7 +188,7 @@ ingress:
   hosts:
     - host: ai48.example.com
       home:
-        path: /home
+        paths: [/admin, /app, /assets, /user, /v8]
         pathType: Prefix
       worker:
         path: /
@@ -198,7 +198,7 @@ ingress:
       hosts: [ai48.example.com]
 ```
 
-The `/home` path is sent to `ai48home-home`; `/` is sent to `ai48home-worker`. Use a separate hostname or stronger authentication before exposing the Home path publicly. HTTP Ingress does not carry Home RESP/mTLS traffic; workers must reach the in-cluster Home Service for enrollment and RESP.
+Home serves from the root and has no base path, so its UI (`/admin`, `/app`), assets (`/assets`), user API (`/user`), and Management API (`/v8`) prefixes are sent to `ai48home-home`; everything else (`/`, including `/v1/...` and `/healthz`) is sent to `ai48home-worker`. A legacy single `home.path` value is still accepted, but `/home` is rejected because Home would answer 404. A separate hostname for Home is the cleanest option. Use a separate hostname or stronger authentication before exposing the Home path publicly. HTTP Ingress does not carry Home RESP/mTLS traffic; workers must reach the in-cluster Home Service for enrollment and RESP.
 
 **Gateway API:**
 
@@ -211,7 +211,7 @@ gateway:
   hostnames:
     - api.example.com
   home:
-    path: /home
+    paths: [/admin, /app, /assets, /user, /v8]
   worker:
     path: /
 ```
@@ -242,7 +242,9 @@ Do not put tokens, passwords, or API keys in `environment`. Required worker/data
 
 - Home checks the database before startup and imports `config.yaml` only if `public.config` is absent or empty. Startup fails on database errors rather than blindly importing.
 - The normal Home container mounts only `cluster.yaml`; runtime configuration remains DB-backed. After first import, changing the Helm management/API keys (supplied or generated) does not update existing DB config. Make changes through the Management API and keep chart values synchronized, particularly the management key used for worker enrollment.
-- Each worker has its own PVC and creates a unique Home JWT through the Management API. The JWT and enrollment identity survive restarts. Startup is staggered by 25 seconds plus 2 seconds per ordinal to allow old membership to expire. Increase the delay if you increase heartbeat timeout.
+- Each worker has its own PVC and creates a unique Home JWT through the Management API. The JWT and enrollment identity survive restarts. Startup is staggered by `workers.startDelaySeconds` (25) plus 2 seconds per ordinal to allow old membership to expire; AI48Proxy applies this delay itself through `WORKER_START_DELAY`. Increase the delay if you increase heartbeat timeout.
+- The AI48Proxy image runs as uid/gid `10001`. Worker pods set `workers.podSecurityContext` accordingly, and the `fix-permissions` init container (`workers.fixPermissions: true`) chowns each identity PVC to that user. This is required for NFS volumes, which ignore `fsGroup`, and for PVCs created by older chart versions with root-owned files. The NFS export must allow root to chown (`no_root_squash`); otherwise pre-own the export directory as `10001:10001` and set `workers.fixPermissions: false`.
+- Worker probes use `GET /healthz`, which returns 200 only while the worker is connected to Home. `workers.terminationGracePeriodSeconds` (120) gives AI48Proxy time to drain in-flight requests and usage reports on scale-down and rollouts.
 - Home uses one replica with `Recreate`, avoiding overlapping instances with the same advertised identity. Do not point multiple chart releases at the same empty database during bootstrap.
 - Internal PostgreSQL uses persistent storage. Changing `postgresql.auth.password` does not rotate an existing database password; rotate the database separately and synchronize values.
 - Worker scaling is controlled by `workers.replicas` when autoscaling is disabled, or by HPA when enabled. Do not share worker PVCs or certificates. StatefulSet PVCs remain on scale-down/uninstall by default; back them up and delete explicitly only when intended. The standalone Home PVC is deleted by Helm uninstall, subject to the PV reclaim policy; back up first.
@@ -294,7 +296,7 @@ workers:
 
 HPA targets the StatefulSet through its scale subresource; Deployment is not required. StatefulSet preserves per-ordinal PVC/JWT identities, HPA manages the replica count, and the worker Service manages routing to Ready endpoints. Manual `HOME_JWT` generation is not required.
 
-HPA measures the `worker` container CPU against its request, ignoring bootstrap containers. With a 250m request, the 70% target is approximately 175m average CPU per worker. These resource requests are starting values, not measured capacity recommendations.
+HPA measures the `worker` container CPU against its request, ignoring init containers. With a 250m request, the 70% target is approximately 175m average CPU per worker. These resource requests are starting values, not measured capacity recommendations.
 
 CPU-based scaling can underrepresent I/O-bound proxy traffic: low CPU does not mean there are no active requests or streams. Start with at least 2–3 minimum workers for redundancy and tune using realistic traffic. Active-request/concurrency custom metrics may be more suitable, but this chart does not currently implement them. HPA creates pods, not cluster nodes; scaling still requires node capacity and working storage provisioning.
 

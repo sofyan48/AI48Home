@@ -10,8 +10,8 @@ import urllib.request
 
 def main():
     identity = Path("/identity")
-    for directory in ("logs", "plugins"):
-        (identity / directory).mkdir(parents=True, exist_ok=True)
+    if not os.access(identity, os.W_OK):
+        raise RuntimeError("Worker storage is not writable by the worker user")
 
     home = os.environ["HOME_URL"].rstrip("/")
     node_name = os.environ.get("NODE_NAME", "")
@@ -33,12 +33,14 @@ def main():
 
     token_path = identity / ".home-jwt"
     if token_path.exists():
+        if not os.access(token_path, os.R_OK):
+            raise RuntimeError("Saved worker identity is not readable by the worker user; fix PVC ownership")
         saved = token_path.read_text().strip()
         if not saved:
             raise RuntimeError("Saved worker identity is empty")
         payload = saved.split(".")[1]
         claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-        # Inspect only for the known Helm formatting defect; CPA verifies signatures.
+        # Inspect only for a known legacy chart formatting defect; the worker verifies signatures.
         if "%!s(<nil>)" not in str(claims.get("ip", "")):
             token_path.chmod(0o600)
             return
@@ -116,12 +118,33 @@ spec:
         checksum/environment: {{ include (print $.Template.BasePath "/environment.yaml") . | sha256sum }}
         checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
     spec:
-      terminationGracePeriodSeconds: 30
+      # Allow AI48Proxy to drain in-flight requests and usage reports before SIGKILL.
+      terminationGracePeriodSeconds: {{ .Values.workers.terminationGracePeriodSeconds }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # The AI48Proxy image runs as 10001; identity files must be owned by that user.
+      securityContext:
+        {{- toYaml .Values.workers.podSecurityContext | nindent 8 }}
       initContainers:
+        {{- if .Values.workers.fixPermissions }}
+        # NFS volumes ignore fsGroup, and legacy PVCs contain root-owned files.
+        - name: fix-permissions
+          image: {{ .Values.bootstrap.image | quote }}
+          command: ["sh", "-eu", "-c"]
+          args:
+            - |
+              chown -R {{ .Values.workers.podSecurityContext.runAsUser }}:{{ .Values.workers.podSecurityContext.runAsGroup }} /identity
+              chmod 0700 /identity
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+          volumeMounts:
+            - name: identity
+              mountPath: /identity
+        {{- end }}
         - name: bootstrap
           image: {{ .Values.bootstrap.image | quote }}
           command: ["python", "/bootstrap/bootstrap.py"]
@@ -151,8 +174,9 @@ spec:
           command: ["sh", "-eu", "-c"]
           args:
             - |
+              # The binary applies WORKER_START_DELAY itself; only add the per-ordinal stagger here.
               ordinal="${HOSTNAME##*-}"
-              sleep "$((WORKER_START_DELAY + ordinal * 2))"
+              export WORKER_START_DELAY="$((WORKER_START_DELAY + ordinal * 2))"
               exec /usr/local/bin/ai48proxy --identity-dir /var/lib/ai48proxy/identity
           envFrom:
             - configMapRef:
@@ -163,13 +187,16 @@ spec:
           ports:
             - name: http
               containerPort: 8317
+          # /healthz returns 200 only while the worker is connected to Home.
           startupProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: http
             periodSeconds: 5
             failureThreshold: {{ add 60 (div (add (int .Values.workers.startDelaySeconds) (mul (int (ternary .Values.workers.autoscaling.maxReplicas .Values.workers.replicas .Values.workers.autoscaling.enabled)) 2)) 5) }}
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: http
             periodSeconds: 5
           resources:

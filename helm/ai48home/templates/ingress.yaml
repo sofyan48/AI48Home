@@ -21,16 +21,19 @@ spec:
     {{- range .Values.ingress.hosts }}
     {{- $home := default (dict) .home }}
     {{- $worker := default (dict) .worker }}
+    {{- $homePaths := include "ai48home.homePaths" $home | fromJsonArray }}
     - host: {{ .host | quote }}
       http:
         paths:
-          - path: {{ $home.path | default "/" | quote }}
+          {{- range $homePaths }}
+          - path: {{ . | quote }}
             pathType: {{ $home.pathType | default "Prefix" }}
             backend:
               service:
                 name: {{ include "ai48home.fullname" $ }}-home
                 port:
                   name: home
+          {{- end }}
           - path: {{ $worker.path | default "/" | quote }}
             pathType: {{ $worker.pathType | default "Prefix" }}
             backend:

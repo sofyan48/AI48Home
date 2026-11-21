@@ -38,8 +38,10 @@ ingress:
   annotations: {}
   hosts:
     - host: ai48home.example.com
+      # Home has no base path; these are its UI, asset and API prefixes.
+      # Prefer a separate hostname for Home in production.
       home:
-        path: /home
+        paths: [/admin, /app, /assets, /user, /v8]
         pathType: Prefix
       worker:
         path: /
@@ -52,7 +54,7 @@ gateway:
   parentRefs: []
   hostnames: []
   home:
-    path: /home
+    paths: [/admin, /app, /assets, /user, /v8]
   worker:
     path: /
 
@@ -85,6 +87,19 @@ workers:
   replicas: 2
   # Must exceed home.heartbeatTimeoutSeconds; adds 2 seconds per pod ordinal.
   startDelaySeconds: 25
+  # Time for in-flight requests and usage reports to drain before SIGKILL.
+  terminationGracePeriodSeconds: 120
+  # The AI48Proxy image runs as uid/gid 10001.
+  podSecurityContext:
+    runAsUser: 10001
+    runAsGroup: 10001
+    runAsNonRoot: true
+    fsGroup: 10001
+    fsGroupChangePolicy: OnRootMismatch
+  # Root init container that chowns the identity PVC to the worker user.
+  # Needed for NFS (fsGroup is ignored) and PVCs created by older chart versions.
+  # NFS exports must allow root chown (no_root_squash); otherwise pre-own the export.
+  fixPermissions: true
   # Non-sensitive settings only; HOME_URL, TZ and delay are chart-managed.
   environment: {}
   # Each worker gets its own PVC for its automatically enrolled JWT/identity.

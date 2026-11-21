@@ -632,6 +632,9 @@ jobs:
           set -euo pipefail
           yq -i '.home.image.repository = strenv(HOME_IMAGE) | .home.image.tag = strenv(RELEASE_TAG)' helm/ai48home/values.yaml
           yq '.home.image' helm/ai48home/values.yaml
+          # AI48Proxy is versioned independently; pin it explicitly via
+          # workers.image.tag in production values instead of relying on latest.
+          yq '.workers.image' helm/ai48home/values.yaml
       - name: Lint and render chart
         run: |
           set -euo pipefail

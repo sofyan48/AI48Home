@@ -12,9 +12,11 @@ spec:
     {{- toYaml .Values.gateway.hostnames | nindent 4 }}
   rules:
     - matches:
+        {{- range (include "ai48home.homePaths" (default (dict) .Values.gateway.home) | fromJsonArray) }}
         - path:
             type: PathPrefix
-            value: {{ .Values.gateway.home.path | default "/home" | quote }}
+            value: {{ . | quote }}
+        {{- end }}
       backendRefs:
         - name: {{ include "ai48home.fullname" . }}-home
           port: 80

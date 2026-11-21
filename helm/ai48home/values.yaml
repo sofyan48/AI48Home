@@ -22,8 +22,9 @@ ingress:
   annotations: {}
   hosts:
     - host: ai48home.example.com
+      # Home has no base path; these are its UI, asset and API prefixes.
       home:
-        path: /home
+        paths: [/admin, /app, /assets, /user, /v8]
         pathType: Prefix
       worker:
         path: /
@@ -35,7 +36,7 @@ gateway:
   parentRefs: []
   hostnames: []
   home:
-    path: /home
+    paths: [/admin, /app, /assets, /user, /v8]
   worker:
     path: /
 
@@ -61,6 +62,17 @@ workers:
     pullPolicy: IfNotPresent
   replicas: 2
   startDelaySeconds: 25
+  terminationGracePeriodSeconds: 120
+  # The AI48Proxy image runs as uid/gid 10001.
+  podSecurityContext:
+    runAsUser: 10001
+    runAsGroup: 10001
+    runAsNonRoot: true
+    fsGroup: 10001
+    fsGroupChangePolicy: OnRootMismatch
+  # Run a root init container that chowns the identity PVC to the worker user.
+  # Needed for NFS and legacy PVCs; requires no_root_squash on NFS exports.
+  fixPermissions: true
   environment: {}
   persistence:
     size: 5Gi
