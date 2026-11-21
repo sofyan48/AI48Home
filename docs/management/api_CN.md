@@ -71,6 +71,11 @@ Home management state 存储在 database-backed cluster repository 中。如果�
 | API 未启用 | 未设置 `management.secret-key` 且未设置 `MANAGEMENT_PASSWORD` 时，Management API route 通常返回 `404`。 |
 | 失败封禁 | 同一客户端 IP 连续 5 次失败后封禁 30 分钟；封禁期间即使 key 正确也会失败。 |
 
+仅限本地开发：设置 `HOME_DEV_DISABLE_MANAGEMENT_IP_BAN=true` 可禁用
+`/v8/management` 的认证失败 IP 计数和封禁。开发 Compose 已启用此选项，
+生产环境默认行为不变。仍需有效管理密钥和远程访问权限。
+修改环境变量后需重新创建容器。请勿在生产环境启用。
+
 常见认证错误：
 
 ```json

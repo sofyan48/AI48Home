@@ -32,6 +32,7 @@ services:
         condition: service_healthy
     environment:
       HOME_USER_EMAIL_SMTP_PASSWORD: ""
+      HOME_DEV_DISABLE_MANAGEMENT_IP_BAN: "true"
     ports:
       - "${AI48HOME_PORT:-8327}:8327"
     volumes:
@@ -78,6 +79,8 @@ services:
         source: ${HOME_JWT_FILE:-./home.jwt}
         target: /run/secrets/home_jwt
         read_only: true
+        bind:
+          create_host_path: false
     networks: [ai48proxy-dev]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8317/healthz >/dev/null"]

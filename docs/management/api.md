@@ -71,6 +71,12 @@ Access rules:
 | API disabled | If neither `management.secret-key` nor `MANAGEMENT_PASSWORD` is set, Management API routes normally return `404`. |
 | Failed-auth ban | The same client IP is banned for 30 minutes after 5 consecutive failed attempts. During the ban, a correct key still fails. |
 
+For local development only, `HOME_DEV_DISABLE_MANAGEMENT_IP_BAN=true` disables
+failed-auth IP tracking and bans on `/v8/management`. The development Compose
+sets this variable; production defaults are unchanged. Valid keys and remote
+access permissions remain required. Recreate the container after changing this
+environment variable. Never enable it on a production deployment.
+
 Common auth errors:
 
 ```json

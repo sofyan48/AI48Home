@@ -265,6 +265,13 @@ chmod 600 home.jwt
 docker compose -f docker-compose.dev.yml up -d --build ai48proxy
 ```
 
+The development Compose sets `HOME_DEV_DISABLE_MANAGEMENT_IP_BAN=true` to
+skip the Management API's failed-login IP ban. Valid management keys and remote
+access permissions are still required. Do not set this option in production.
+After changing Compose environment variables, recreate Home with
+`docker compose -f docker-compose.dev.yml up -d ai48home`; restarting alone does
+not apply environment changes.
+
 After the initial image build, the existing `.air.toml` reloads Home source
 changes, and `cargo watch` reloads AI48Proxy source changes. Rebuild only after
 changing `Dockerfile.dev` or the development toolchain.
@@ -273,7 +280,11 @@ Home is available at `http://localhost:8327` and the single development worker
 is available directly at `http://localhost:8317`. `cluster.dev.yaml`,
 `config.dev.yaml`, `home.jwt`, `logs.dev/`, and `plugins.dev/` are intentionally
 ignored by git. Set
-`HOME_JWT_FILE` if the token is stored elsewhere.
+`HOME_JWT_FILE` if the token is stored elsewhere. Create the token as a regular
+file before starting the worker; the bind mount refuses a missing path instead
+of creating a directory. If a previous startup created an empty `home.jwt/`
+directory, remove that empty directory with `rmdir home.jwt`, then issue the
+token using the commands above.
 
 ### Developing both projects locally
 

@@ -562,14 +562,15 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		}
 		opts[i](reg)
 	}
+	managementAuth := managementAuthMiddleware(handler)
 	v8 := engine.Group("/v8/management")
 	v8.Use(withBuildInfoHeaders())
 	if clusterEnabled {
-		v8.Use(clusterAvailabilityMiddleware(clusterOpt, handler), handler.Middleware())
+		v8.Use(clusterAvailabilityMiddleware(clusterOpt, handler), managementAuth)
 	} else {
 		v8.Use(
 			refreshAndAvailabilityMiddleware(configFilePath, handler, authManager, tokenStore),
-			handler.Middleware(),
+			managementAuth,
 			func(c *gin.Context) { c.Set("management.config-v8", true) },
 		)
 	}
@@ -672,6 +673,7 @@ func refreshAndAvailabilityMiddleware(configFilePath string, handler *cpasdkapi.
 			return
 		}
 
+		c.Set("management.auth-config", cfg)
 		if handler != nil {
 			handler.SetConfig(cfg)
 		}
@@ -724,6 +726,7 @@ func clusterAvailabilityMiddleware(opt *ClusterManagementOption, handler *cpasdk
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
+		c.Set("management.auth-config", cfg)
 		if handler != nil {
 			handler.SetConfig(cfg)
 		}
