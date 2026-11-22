@@ -17,7 +17,10 @@ import (
 // billing_charge.actor_user_id and the organization_member table.
 // v24 ensures organization_model_groups is added to databases that already
 // completed v23 before organization model-group configuration was introduced.
-const currentDatabaseVersion = 24
+// v25 adds organization member window modes, 5h limits and first_use state,
+// plus user.organization_member_keys_disabled.
+// v26 adds organization_member.model_groups and organization_member.max_api_keys.
+const currentDatabaseVersion = 26
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -861,8 +864,9 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV21Models, true
 	case 22:
 		return databaseSnapshotV22Models, true
-	case 23, currentDatabaseVersion:
-		// v24 repairs the live migration gate; its portable format is unchanged.
+	case 23, 24, 25, currentDatabaseVersion:
+		// v24 repairs the live migration gate. v25 and v26 only add nullable or
+		// defaulted columns, so older organization rows decode into the current records.
 		return homeDatabaseModels, true
 	default:
 		return nil, false

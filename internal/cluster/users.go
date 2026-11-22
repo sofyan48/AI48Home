@@ -151,6 +151,10 @@ func (r *Repository) createUserWithKind(ctx context.Context, update UserUpdate, 
 	if errDB != nil {
 		return nil, errDB
 	}
+	return createUserWithKindTx(ctx, db, update, kind)
+}
+
+func createUserWithKindTx(ctx context.Context, db *gorm.DB, update UserUpdate, kind string) (*UserRecord, error) {
 	if update.Username == nil {
 		return nil, fmt.Errorf("username is required")
 	}
@@ -208,11 +212,28 @@ func (r *Repository) UpdateUser(ctx context.Context, id uint, update UserUpdate)
 		return nil, fmt.Errorf("user id is required")
 	}
 
-	record := &UserRecord{}
+	var record *UserRecord
 	ctx = contextOrBackground(ctx)
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if errFirst := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).First(record).Error; errFirst != nil {
+		updated, errUpdate := updateUserTx(ctx, tx, id, update)
+		record = updated
+		return errUpdate
+	})
+	if errTransaction != nil {
+		return nil, errTransaction
+	}
+	return record, nil
+}
+
+func updateUserTx(ctx context.Context, tx *gorm.DB, id uint, update UserUpdate) (*UserRecord, error) {
+	record := &UserRecord{}
+	errApply := func() error {
+		if errFirst := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).First(record).Error; errFirst != nil {
 			return errFirst
+		}
+		if record.IsOrganization() {
+			// Organizations never authenticate; credential fields are ignored.
+			update.Password, update.Email, update.MFA, update.Passkey, update.ApprovalPending = nil, nil, nil, nil, nil
 		}
 		if update.ApprovalPending != nil {
 			record.ApprovalPending = *update.ApprovalPending
@@ -266,9 +287,9 @@ func (r *Repository) UpdateUser(ctx context.Context, id uint, update UserUpdate)
 			record.Passkey = cloneJSONB(*update.Passkey)
 		}
 		return tx.Save(record).Error
-	})
-	if errTransaction != nil {
-		return nil, errTransaction
+	}()
+	if errApply != nil {
+		return nil, errApply
 	}
 	return record, nil
 }
@@ -369,10 +390,18 @@ func (r *Repository) DeleteUser(ctx context.Context, id uint) error {
 	if errFirst := db.WithContext(ctx).Where("id = ?", id).First(&record).Error; errFirst != nil {
 		return errFirst
 	}
+	if record.IsOrganization() {
+		// Organization accounts also own their keys and memberships.
+		return r.DeleteOrganization(ctx, id)
+	}
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Match key mutation lock ordering before deleting member-owned keys.
 		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
 			return errLock
+		}
+		// Deleting the last owner would leave an organization nobody can manage.
+		if errOwner := ensureNotLastOrganizationOwnerTx(ctx, tx, id); errOwner != nil {
+			return errOwner
 		}
 		// Playground conversations are private user content and leave with the account.
 		if errChats := tx.Where("user_id = ?", id).Delete(&UserChatConversationRecord{}).Error; errChats != nil {

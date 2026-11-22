@@ -159,6 +159,7 @@ func Register(group *gin.RouterGroup, handler *Handler) {
 
 	group.GET("/organizations", handler.ListMyOrganizations)
 	group.GET("/organizations/:org_id", handler.GetMyOrganization)
+	group.PATCH("/organizations/:org_id", handler.UpdateMyOrganizationSettings)
 	group.GET("/organizations/:org_id/members", handler.ListMyOrganizationMembers)
 	group.POST("/organizations/:org_id/members", handler.AddMyOrganizationMember)
 	group.PATCH("/organizations/:org_id/members/:user_id", handler.UpdateMyOrganizationMember)

@@ -1339,7 +1339,7 @@ Enforcement is a **soft limit**: cost is known only after the request, so a fina
 
 ### DELETE `/users/:id`
 
-Soft-deletes a user.
+Soft-deletes a user. The user's organization memberships and the organization keys they created are deleted with the account. Deleting the only owner of an organization returns HTTP 409 `last_owner`; promote another owner or delete the organization first. Called with an organization ID it behaves like `DELETE /organizations/:id`.
 
 Input: no body.
 
@@ -1365,11 +1365,11 @@ Members are personal users linked with a role:
 - `owner`: manages members, member spend limits, all organization keys, the organization ledger and top-up requests.
 - `member`: uses organization credits through their own organization keys and only sees their own usage.
 
-A user may belong to several organizations. Every organization must keep at least one owner; demoting or removing the last owner returns HTTP 409 `last_owner`. Organizations cannot be members of other organizations.
+A user may belong to several organizations. Every organization must keep at least one owner; demoting, removing or deleting the account of the last owner returns HTTP 409 `last_owner`. Organizations cannot be members of other organizations.
 
 Organization API keys are `api_key` rows whose `user_id` is the organization and whose `created_by_user_id` is the member that owns them. Charges are billed to the organization and record the member in `billing_charge.actor_user_id`. Removing a member, or deleting the member's user account, deletes the organization keys that member created. Deleting an organization deletes its memberships and all of its keys. Personal keys (`created_by_user_id` is `null`) are never affected.
 
-Admission for organization keys checks, in order: the organization balance, the organization period limits (`limit_*_credits` on the organization), that the key owner is still a member, and the member spend limits. Member limits are rolling windows (`1d` = last 24 hours, `7d`, `30d`) summed over that member's organization charges. A member over a limit is rejected with the existing `user_period_limit_exceeded` dispatch error (message `organization member spend limit exceeded`), so CPA/AI48Proxy workers return HTTP 429 without a contract change. A key whose owner is no longer a member is rejected with `permission_denied`.
+Admission for organization keys checks, in order: the organization balance, the organization period limits (`limit_*_credits` on the organization), that the key owner is still a member, and the member spend limits. Member limits use the same windows (`5h`, `1d`, `7d`, `30d`) and modes as user period limits, summed over that member's organization charges: `window_mode_*` is `sliding` (default, rolling last-N duration), `first_use` (the member's first billable charge opens the window) or `calendar` (`1d`/`7d`/`30d` only; natural day/week/month in the organization `timezone`, weeks start at the organization `week_reset_day`/`week_reset_hour`). Changing a member window mode restarts that member's `first_use` session. A member limit may not be larger than the organization limit for the same window (HTTP 400, field error code `exceeds_organization_limit`). A member over a limit is rejected with the existing `user_period_limit_exceeded` dispatch error (message `organization member spend limit exceeded`), so CPA/AI48Proxy workers return HTTP 429 without a contract change. A key whose owner is no longer a member is rejected with `permission_denied`.
 
 Top-ups use the existing billing routes with the organization ID as `user_id` (`POST /billing/balance-records/recharge`, `POST /users/:id/topup/approve`).
 
@@ -1383,11 +1383,11 @@ Returns `{"organizations": [...]}`. Each item has the user billing fields of `GE
 { "name": "acme", "credits": 100, "owner_user_id": 12, "model_groups": [1, 2] }
 ```
 
-`name` is required and must be unique among users. Optional fields: `credits`, `credits_unlimited`, `billing_multiplier`, `timezone`, `limit_5h_credits`, `limit_1d_credits`, `limit_7d_credits`, `limit_30d_credits` (number or `null`), `model_groups` and `owner_user_id` (first owner; the organization is rolled back when the owner cannot be added). Returns `{"organization": ...}`.
+`name` is required and must be unique among users. Optional fields: `credits`, `credits_unlimited`, `billing_multiplier`, `timezone`, `limit_5h_credits`, `limit_1d_credits`, `limit_7d_credits`, `limit_30d_credits` (number or `null`), `model_groups`, `allow_member_keys` (boolean, default `true`; when `false` regular members cannot create their own organization keys and owners or administrators issue keys for them) and `owner_user_id` (first owner). The organization, owner, model groups and `allow_member_keys` are written in one transaction: if any step fails (unknown owner returns 404 `not_found`, an organization as owner or a deleted model group returns 400 `invalid body`), no organization is created. Returns `{"organization": ...}`; responses include `allow_member_keys`.
 
 ### GET `/organizations/:id`
 
-Returns `{"organization": ...}` with `members` and `pending_topup`. Each member has `organization_id`, `user_id`, `username`, `role`, `limit_1d_credits`, `limit_7d_credits`, `limit_30d_credits`, `spend_30d`, `requests_30d`, `created_at`, `updated_at`.
+Returns `{"organization": ...}` with `members` and `pending_topup`. Each member has `organization_id`, `user_id`, `username`, `role`, `limit_5h_credits`, `window_mode_5h`, `limit_1d_credits`, `window_mode_1d`, `limit_7d_credits`, `window_mode_7d`, `limit_30d_credits`, `window_mode_30d`, `model_groups`, `max_api_keys`, `key_count`, `spend_30d`, `requests_30d`, `created_at`, `updated_at`.
 
 ### PATCH `/organizations/:id`
 
@@ -1400,14 +1400,18 @@ Deletes the organization, its memberships and its keys. Returns `{"status":"ok"}
 ### POST `/organizations/:id/members`
 
 ```json
-{ "user_id": 12, "role": "member", "limit_1d_credits": 5, "limit_30d_credits": 50 }
+{ "user_id": 12, "role": "member", "limit_5h_credits": 2, "window_mode_5h": "first_use", "limit_1d_credits": 5, "limit_30d_credits": 50, "window_mode_30d": "calendar" }
 ```
 
-Use `user_id` or `username`. `role` is `owner` or `member` (default). Limit fields accept a non-negative number; omitted or `null` disables the window; `0` blocks the member. Errors: 404 `not_found`, 409 `conflict` (already a member), 400 `invalid body` (organization account or unknown role).
+Use `user_id` or `username`. `role` is `owner` or `member` (default). Limit fields (`limit_5h_credits`, `limit_1d_credits`, `limit_7d_credits`, `limit_30d_credits`) accept a non-negative number; omitted or `null` disables the window; `0` blocks the member. `window_mode_5h` accepts `sliding` or `first_use`; `window_mode_1d`/`7d`/`30d` also accept `calendar`. Omitted modes default to `sliding`. Invalid modes return 400 with field error code `invalid_window_mode`.
+
+`model_groups` narrows the member's organization keys to a subset of the organization model groups (any active group when the organization is unrestricted); `[]` or omitted inherits the organization scope. Groups outside the organization scope return 400 `invalid body`. Changing the subset rewrites the model groups of the member's existing organization keys. When `PATCH /organizations/:id` shrinks `model_groups`, removed groups are dropped from member subsets; a change that would leave a restricted member with no groups returns 409 `member_model_groups_conflict` instead of silently widening that member.
+
+`max_api_keys` caps the organization keys owned by the member (non-negative integer, `null` = unlimited). It applies to keys the member creates and keys created for them by owners or administrators; creating a key beyond the cap returns 409 `member_key_limit`. Lowering the cap does not delete existing keys. Personal keys never count. Errors: 404 `not_found`, 409 `conflict` (already a member), 400 `invalid body` (organization account or unknown role).
 
 ### PATCH `/organizations/:id/members/:user_id`
 
-Partially updates `role` and limit fields (`null` clears a limit).
+Partially updates `role`, limit fields (`null` clears a limit), `window_mode_*`, `model_groups` and `max_api_keys`.
 
 ### DELETE `/organizations/:id/members/:user_id`
 
@@ -1423,7 +1427,7 @@ Returns `{"api_keys": [{id, api_key, display_name, created_by_user_id, created_a
 { "member_user_id": 12, "display_name": "ci" }
 ```
 
-`member_user_id` is required and must be a member. `api_key` is optional; a value is generated when omitted. The key inherits the organization model groups.
+`member_user_id` is required and must be a member. `api_key` is optional; a value is generated when omitted. The key uses the member's `model_groups` subset when set, otherwise the organization model groups. Returns 409 `member_key_limit` when the member reached `max_api_keys`.
 
 ### DELETE `/organizations/:id/api-keys/:key_id`
 

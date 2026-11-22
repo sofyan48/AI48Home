@@ -44,11 +44,22 @@ func (o orgOptionalFloat) update() cluster.OptionalFloatUpdate {
 }
 
 type orgMemberRequest struct {
-	Username string           `json:"username"`
-	Role     *string          `json:"role"`
-	Limit1d  orgOptionalFloat `json:"limit_1d_credits"`
-	Limit7d  orgOptionalFloat `json:"limit_7d_credits"`
-	Limit30d orgOptionalFloat `json:"limit_30d_credits"`
+	Username      string           `json:"username"`
+	Role          *string          `json:"role"`
+	Limit5h       orgOptionalFloat `json:"limit_5h_credits"`
+	WindowMode5h  *string          `json:"window_mode_5h"`
+	Limit1d       orgOptionalFloat `json:"limit_1d_credits"`
+	WindowMode1d  *string          `json:"window_mode_1d"`
+	Limit7d       orgOptionalFloat `json:"limit_7d_credits"`
+	WindowMode7d  *string          `json:"window_mode_7d"`
+	Limit30d      orgOptionalFloat `json:"limit_30d_credits"`
+	WindowMode30d *string          `json:"window_mode_30d"`
+	ModelGroups   *[]uint          `json:"model_groups"`
+	MaxAPIKeys    orgOptionalFloat `json:"max_api_keys"`
+}
+
+type orgSettingsRequest struct {
+	AllowMemberKeys *bool `json:"allow_member_keys"`
 }
 
 type orgAPIKeyRequest struct {
@@ -107,6 +118,11 @@ func (h *Handler) organizationContext(c *gin.Context) (orgContext, bool) {
 	return orgContext{user: user, org: org, member: member}, true
 }
 
+// canCreateOwnKeys reports whether the caller may create keys for themselves.
+func (o orgContext) canCreateOwnKeys() bool {
+	return o.isOwner() || (o.org != nil && !o.org.OrganizationMemberKeysDisabled)
+}
+
 func requireOrganizationOwner(c *gin.Context, oc orgContext) bool {
 	if oc.isOwner() {
 		return true
@@ -154,16 +170,57 @@ func (h *Handler) GetMyOrganization(c *gin.Context) {
 		return
 	}
 	item := gin.H{
-		"id":           oc.org.ID,
-		"name":         oc.org.Username,
-		"role":         oc.member.Role,
-		"spend_limits": windows,
+		"id":                oc.org.ID,
+		"name":              oc.org.Username,
+		"role":              oc.member.Role,
+		"spend_limits":      windows,
+		"allow_member_keys": !oc.org.OrganizationMemberKeysDisabled,
+		"can_create_keys":   oc.canCreateOwnKeys(),
 	}
 	if oc.isOwner() {
 		item["credits"] = oc.org.Credits
 		item["credits_unlimited"] = oc.org.CreditsUnlimited
+		// Owners need the organization caps to keep member limits within them.
+		item["organization_limits"] = gin.H{
+			"limit_5h_credits":  oc.org.Limit5hCredits,
+			"limit_1d_credits":  oc.org.Limit1dCredits,
+			"limit_7d_credits":  oc.org.Limit7dCredits,
+			"limit_30d_credits": oc.org.Limit30dCredits,
+		}
+		options, errOptions := h.repo.OrganizationModelGroupOptions(ctx, oc.org.ID)
+		if errOptions != nil {
+			respondOrganizationUserError(c, "organization_load_failed", errOptions)
+			return
+		}
+		item["model_group_options"] = options
 	}
 	c.JSON(http.StatusOK, gin.H{"organization": item})
+}
+
+// UpdateMyOrganizationSettings changes owner-managed organization settings.
+func (h *Handler) UpdateMyOrganizationSettings(c *gin.Context) {
+	oc, ok := h.organizationContext(c)
+	if !ok || !requireOrganizationOwner(c, oc) {
+		return
+	}
+	var body orgSettingsRequest
+	if !decodeJSONBody(c, &body) {
+		return
+	}
+	ctx, cancel := requestContext(c)
+	defer cancel()
+	org := oc.org
+	if body.AllowMemberKeys != nil {
+		updated, errUpdate := h.repo.SetOrganizationMemberKeysAllowed(ctx, oc.org.ID, *body.AllowMemberKeys)
+		if errUpdate != nil {
+			respondOrganizationUserError(c, "organization_update_failed", errUpdate)
+			return
+		}
+		org = updated
+	}
+	c.JSON(http.StatusOK, gin.H{"organization": gin.H{
+		"id": org.ID, "name": org.Username, "allow_member_keys": !org.OrganizationMemberKeysDisabled,
+	}})
 }
 
 // ListMyOrganizationMembers lists members with 30-day spend (owner only).
@@ -184,6 +241,11 @@ func (h *Handler) ListMyOrganizationMembers(c *gin.Context) {
 		respondOrganizationUserError(c, "organization_member_load_failed", errSpend)
 		return
 	}
+	keyCounts, errCounts := h.repo.OrganizationMemberKeyCounts(ctx, oc.org.ID)
+	if errCounts != nil {
+		respondOrganizationUserError(c, "organization_member_load_failed", errCounts)
+		return
+	}
 	spent := make(map[uint]cluster.OrganizationMemberSpendSummary, len(spend))
 	for _, row := range spend {
 		spent[row.MemberUserID] = row
@@ -192,6 +254,7 @@ func (h *Handler) ListMyOrganizationMembers(c *gin.Context) {
 	for index := range members {
 		item := organizationMemberUserResponse(&members[index].OrganizationMemberRecord)
 		item["username"] = members[index].Username
+		item["key_count"] = keyCounts[members[index].MemberUserID]
 		item["spend_30d"] = spent[members[index].MemberUserID].Amount
 		item["requests_30d"] = spent[members[index].MemberUserID].RequestCount
 		items = append(items, item)
@@ -324,6 +387,9 @@ func (h *Handler) CreateMyOrganizationAPIKey(c *gin.Context) {
 			return
 		}
 		ownerID = *body.MemberUserID
+	} else if !oc.canCreateOwnKeys() {
+		respondError(c, http.StatusForbidden, "organization_member_keys_disabled", fmt.Errorf("organization owners must create keys for members"))
+		return
 	}
 	key := ""
 	if body.APIKey != nil {
@@ -620,9 +686,16 @@ func (h *Handler) ListMyOrganizationRequestLogs(c *gin.Context) {
 func organizationMemberUpdateFromRequest(body orgMemberRequest) cluster.OrganizationMemberUpdate {
 	return cluster.OrganizationMemberUpdate{
 		Role:            body.Role,
+		Limit5hCredits:  body.Limit5h.update(),
+		WindowMode5h:    body.WindowMode5h,
 		Limit1dCredits:  body.Limit1d.update(),
+		WindowMode1d:    body.WindowMode1d,
 		Limit7dCredits:  body.Limit7d.update(),
+		WindowMode7d:    body.WindowMode7d,
 		Limit30dCredits: body.Limit30d.update(),
+		WindowMode30d:   body.WindowMode30d,
+		ModelGroups:     body.ModelGroups,
+		MaxAPIKeys:      cluster.OptionalIntFromFloat(body.MaxAPIKeys.update()),
 	}
 }
 
@@ -630,14 +703,11 @@ func organizationMemberUserResponse(member *cluster.OrganizationMemberRecord) gi
 	if member == nil {
 		return gin.H{}
 	}
-	return gin.H{
-		"user_id":           member.MemberUserID,
-		"role":              member.Role,
-		"limit_1d_credits":  member.Limit1dCredits,
-		"limit_7d_credits":  member.Limit7dCredits,
-		"limit_30d_credits": member.Limit30dCredits,
-		"created_at":        member.CreatedAt,
-	}
+	item := gin.H(cluster.OrganizationMemberLimitFields(member))
+	item["user_id"] = member.MemberUserID
+	item["role"] = member.Role
+	item["created_at"] = member.CreatedAt
+	return item
 }
 
 func organizationKeyDisplayName(c *gin.Context, raw json.RawMessage) (*string, bool, bool) {
@@ -682,12 +752,22 @@ func respondOrganizationUserError(c *gin.Context, code string, err error) {
 	case errors.Is(err, cluster.ErrOrganizationLastOwner):
 		respondError(c, http.StatusConflict, "last_owner", err)
 	case errors.Is(err, cluster.ErrOrganizationInvalidMember), errors.Is(err, cluster.ErrOrganizationInvalidRole),
-		errors.Is(err, cluster.ErrInvalidAPIKeyDisplayName):
+		errors.Is(err, cluster.ErrInvalidAPIKeyDisplayName), errors.Is(err, cluster.ErrDeletedAccessGroup):
 		respondError(c, http.StatusBadRequest, "invalid_body", err)
+	case errors.Is(err, cluster.ErrOrganizationMemberModelGroups):
+		respondError(c, http.StatusBadRequest, "invalid_model_groups", err)
+	case errors.Is(err, cluster.ErrOrganizationInvalidKeyLimit):
+		respondError(c, http.StatusBadRequest, "invalid_key_limit", err)
+	case errors.Is(err, cluster.ErrOrganizationMemberKeyLimit):
+		respondError(c, http.StatusConflict, "member_key_limit", err)
 	default:
 		var configErr cluster.PeriodLimitConfigError
 		if errors.As(err, &configErr) {
-			respondError(c, http.StatusBadRequest, "invalid_limit", err)
+			code := "invalid_limit"
+			if configErr.Code == cluster.PeriodLimitErrExceedsOrganization {
+				code = configErr.Code
+			}
+			respondError(c, http.StatusBadRequest, code, err)
 			return
 		}
 		respondError(c, http.StatusInternalServerError, code, err)

@@ -6,11 +6,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
-	homeerrors "github.com/router-for-me/CLIProxyAPIHome/internal/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -40,6 +38,14 @@ var (
 	ErrOrganizationInvalidMember = errors.New("member must be a personal user")
 	// ErrOrganizationInvalidRole rejects unknown roles.
 	ErrOrganizationInvalidRole = errors.New("invalid organization role")
+	// ErrOrganizationMemberModelGroups rejects member model groups outside the organization scope.
+	ErrOrganizationMemberModelGroups = errors.New("member model groups must be a subset of the organization model groups")
+	// ErrOrganizationModelGroupsConflict rejects an organization scope change that would leave a restricted member with no models.
+	ErrOrganizationModelGroupsConflict = errors.New("organization model groups would remove every model group of a restricted member")
+	// ErrOrganizationMemberKeyLimit rejects a key beyond the member's max_api_keys.
+	ErrOrganizationMemberKeyLimit = errors.New("organization member api key limit reached")
+	// ErrOrganizationInvalidKeyLimit rejects a negative max_api_keys.
+	ErrOrganizationInvalidKeyLimit = errors.New("max_api_keys must be a non-negative integer")
 )
 
 // OrganizationMemberRecord links a personal user to an organization account.
@@ -48,12 +54,29 @@ type OrganizationMemberRecord struct {
 	OrgUserID    uint   `gorm:"column:org_user_id;not null;uniqueIndex:idx_organization_member_pair,priority:1"`
 	MemberUserID uint   `gorm:"column:member_user_id;not null;uniqueIndex:idx_organization_member_pair,priority:2;index"`
 	Role         string `gorm:"column:role;type:varchar(16);not null"`
-	// Spend limits are rolling credit budgets for this member; NULL disables a window.
-	Limit1dCredits  *float64  `gorm:"column:limit_1d_credits"`
-	Limit7dCredits  *float64  `gorm:"column:limit_7d_credits"`
-	Limit30dCredits *float64  `gorm:"column:limit_30d_credits"`
-	CreatedAt       time.Time `gorm:"column:created_at"`
-	UpdatedAt       time.Time `gorm:"column:updated_at"`
+	// Spend limits are credit budgets for this member inside the organization;
+	// NULL disables a window. Window modes match user period limits; rows created
+	// before v25 default to sliding, the only mode supported at the time.
+	Limit5hCredits  *float64 `gorm:"column:limit_5h_credits"`
+	WindowMode5h    string   `gorm:"column:window_mode_5h;type:varchar(16);not null;default:sliding"`
+	Limit1dCredits  *float64 `gorm:"column:limit_1d_credits"`
+	WindowMode1d    string   `gorm:"column:window_mode_1d;type:varchar(16);not null;default:sliding"`
+	Limit7dCredits  *float64 `gorm:"column:limit_7d_credits"`
+	WindowMode7d    string   `gorm:"column:window_mode_7d;type:varchar(16);not null;default:sliding"`
+	Limit30dCredits *float64 `gorm:"column:limit_30d_credits"`
+	WindowMode30d   string   `gorm:"column:window_mode_30d;type:varchar(16);not null;default:sliding"`
+	// first_use window state, opened by the member's first billable charge.
+	PeriodWindowStart5h  *time.Time `gorm:"column:period_window_start_5h"`
+	PeriodWindowStart1d  *time.Time `gorm:"column:period_window_start_1d"`
+	PeriodWindowStart7d  *time.Time `gorm:"column:period_window_start_7d"`
+	PeriodWindowStart30d *time.Time `gorm:"column:period_window_start_30d"`
+	// ModelGroups narrows this member's organization keys to a subset of the
+	// organization model groups; empty inherits the organization scope.
+	ModelGroups JSONB `gorm:"column:model_groups"`
+	// MaxAPIKeys caps the organization keys owned by this member; NULL is unlimited.
+	MaxAPIKeys *int      `gorm:"column:max_api_keys"`
+	CreatedAt  time.Time `gorm:"column:created_at"`
+	UpdatedAt  time.Time `gorm:"column:updated_at"`
 }
 
 // TableName returns the database table name.
@@ -62,9 +85,24 @@ func (OrganizationMemberRecord) TableName() string { return "organization_member
 // OrganizationMemberUpdate is a partial member patch.
 type OrganizationMemberUpdate struct {
 	Role            *string
+	Limit5hCredits  OptionalFloatUpdate
+	WindowMode5h    *string
 	Limit1dCredits  OptionalFloatUpdate
+	WindowMode1d    *string
 	Limit7dCredits  OptionalFloatUpdate
+	WindowMode7d    *string
 	Limit30dCredits OptionalFloatUpdate
+	WindowMode30d   *string
+	// ModelGroups replaces the member model-group subset; an empty list inherits the organization.
+	ModelGroups *[]uint
+	MaxAPIKeys  OptionalIntUpdate
+}
+
+// OptionalIntUpdate captures a three-state integer patch: absent / null / value.
+type OptionalIntUpdate struct {
+	Set   bool
+	Clear bool
+	Value int
 }
 
 // OrganizationMember is a member row joined with the member's username.
@@ -81,10 +119,13 @@ type OrganizationMembership struct {
 
 // OrganizationMemberSpendWindow reports one member spend window.
 type OrganizationMemberSpendWindow struct {
-	ID        string   `json:"id"`
-	Limit     *float64 `json:"limit"`
-	Used      float64  `json:"used"`
-	Remaining *float64 `json:"remaining"`
+	ID        string     `json:"id"`
+	Limit     *float64   `json:"limit"`
+	Used      float64    `json:"used"`
+	Remaining *float64   `json:"remaining"`
+	Mode      string     `json:"mode"`
+	Active    bool       `json:"active"`
+	ResetAt   *time.Time `json:"reset_at"`
 }
 
 // IsOrganization reports whether the user record is an organization account.
@@ -106,6 +147,24 @@ func NormalizeOrganizationRole(role string) (string, error) {
 
 // CreateOrganization creates an organization billing account.
 func (r *Repository) CreateOrganization(ctx context.Context, update UserUpdate) (*UserRecord, error) {
+	return r.CreateOrganizationWithSetup(ctx, update, OrganizationSetup{})
+}
+
+// OrganizationSetup is optional configuration applied when an organization is created.
+type OrganizationSetup struct {
+	OwnerUserID     *uint
+	ModelGroups     *[]uint
+	AllowMemberKeys *bool
+}
+
+// CreateOrganizationWithSetup creates an organization, its first owner, model
+// groups and member-key setting in one transaction, so a failed step never
+// leaves a half-configured or ownerless organization behind.
+func (r *Repository) CreateOrganizationWithSetup(ctx context.Context, update UserUpdate, setup OrganizationSetup) (*UserRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
 	// Organizations never authenticate; strip all credential material.
 	update.Password = nil
 	update.Email = nil
@@ -113,7 +172,77 @@ func (r *Repository) CreateOrganization(ctx context.Context, update UserUpdate) 
 	update.Passkey = nil
 	pending := false
 	update.ApprovalPending = &pending
-	return r.createUserWithKind(ctx, update, UserKindOrganization)
+	ctx = contextOrBackground(ctx)
+	var org *UserRecord
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		created, errCreate := createUserWithKindTx(ctx, tx, update, UserKindOrganization)
+		if errCreate != nil {
+			return errCreate
+		}
+		updates := map[string]any{}
+		if setup.ModelGroups != nil {
+			groups := normalizeModelGroupIDs(*setup.ModelGroups)
+			if errGroups := ensureAPIKeyGroupsNotDeleted(tx, nil, &groups); errGroups != nil {
+				return errGroups
+			}
+			groupsJSON, errJSON := apiKeyModelGroupsJSON(groups)
+			if errJSON != nil {
+				return errJSON
+			}
+			updates["organization_model_groups"] = groupsJSON
+		}
+		if setup.AllowMemberKeys != nil {
+			updates["organization_member_keys_disabled"] = !*setup.AllowMemberKeys
+		}
+		if len(updates) > 0 {
+			if errUpdate := tx.Model(&UserRecord{}).Where("id = ?", created.ID).Updates(updates).Error; errUpdate != nil {
+				return errUpdate
+			}
+		}
+		if setup.OwnerUserID != nil {
+			owner := OrganizationRoleOwner
+			if _, errOwner := addOrganizationMemberTx(ctx, tx, created.ID, *setup.OwnerUserID, OrganizationMemberUpdate{Role: &owner}); errOwner != nil {
+				return errOwner
+			}
+		}
+		reloaded, errReload := getOrganizationTx(ctx, tx, created.ID)
+		org = reloaded
+		return errReload
+	})
+	if errTransaction != nil {
+		return nil, errTransaction
+	}
+	return org, nil
+}
+
+// ErrOrganizationLastOwnerAccount blocks deleting a personal account that is
+// the only owner of an organization.
+var ErrOrganizationLastOwnerAccount = errors.New("user is the last owner of an organization; transfer ownership or delete the organization first")
+
+// ensureNotLastOrganizationOwnerTx rejects deleting a user who is the only
+// owner of any organization.
+func ensureNotLastOrganizationOwnerTx(ctx context.Context, tx *gorm.DB, userID uint) error {
+	var owned []OrganizationMemberRecord
+	if errFind := tx.WithContext(contextOrBackground(ctx)).
+		Where("member_user_id = ? AND role = ?", userID, OrganizationRoleOwner).
+		Find(&owned).Error; errFind != nil {
+		return errFind
+	}
+	for _, membership := range owned {
+		if errLock := lockOrganizationOwnersTx(ctx, tx, membership.OrgUserID); errLock != nil {
+			return errLock
+		}
+		if errOther := ensureAnotherOrganizationOwnerTx(ctx, tx, membership.OrgUserID, userID); errors.Is(errOther, ErrOrganizationLastOwner) {
+			name := ""
+			if org, errOrg := getOrganizationTx(ctx, tx, membership.OrgUserID); errOrg == nil {
+				name = org.Username
+			}
+			return fmt.Errorf("%w (organization %q)", ErrOrganizationLastOwnerAccount, name)
+		} else if errOther != nil {
+			return errOther
+		}
+	}
+	return nil
 }
 
 // ListOrganizations returns all organization accounts.
@@ -227,6 +356,20 @@ func (r *Repository) AddOrganizationMember(ctx context.Context, orgID, memberID 
 	if errDB != nil {
 		return nil, errDB
 	}
+	ctx = contextOrBackground(ctx)
+	var record *OrganizationMemberRecord
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		added, errAdd := addOrganizationMemberTx(ctx, tx, orgID, memberID, update)
+		record = added
+		return errAdd
+	})
+	if errTransaction != nil {
+		return nil, errTransaction
+	}
+	return record, nil
+}
+
+func addOrganizationMemberTx(ctx context.Context, tx *gorm.DB, orgID, memberID uint, update OrganizationMemberUpdate) (*OrganizationMemberRecord, error) {
 	role := OrganizationRoleMember
 	if update.Role != nil {
 		normalized, errRole := NormalizeOrganizationRole(*update.Role)
@@ -235,10 +378,14 @@ func (r *Repository) AddOrganizationMember(ctx context.Context, orgID, memberID 
 		}
 		role = normalized
 	}
-	ctx = contextOrBackground(ctx)
-	record := &OrganizationMemberRecord{OrgUserID: orgID, MemberUserID: memberID, Role: role}
-	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if _, errOrg := getOrganizationTx(ctx, tx, orgID); errOrg != nil {
+	record := &OrganizationMemberRecord{
+		OrgUserID: orgID, MemberUserID: memberID, Role: role,
+		WindowMode5h: defaultOrganizationMemberWindowMode, WindowMode1d: defaultOrganizationMemberWindowMode,
+		WindowMode7d: defaultOrganizationMemberWindowMode, WindowMode30d: defaultOrganizationMemberWindowMode,
+	}
+	errApply := func() error {
+		org, errOrg := getOrganizationTx(ctx, tx, orgID)
+		if errOrg != nil {
 			return errOrg
 		}
 		member := &UserRecord{}
@@ -257,13 +404,16 @@ func (r *Repository) AddOrganizationMember(ctx context.Context, orgID, memberID 
 		} else if !errors.Is(errExisting, ErrOrganizationMemberNotFound) {
 			return errExisting
 		}
-		if errLimits := applyOrganizationMemberLimits(record, update); errLimits != nil {
+		if errLimits := applyOrganizationMemberLimits(record, org, update); errLimits != nil {
 			return errLimits
 		}
+		if errAccess := applyOrganizationMemberAccess(tx, record, org, update); errAccess != nil {
+			return errAccess
+		}
 		return tx.Create(record).Error
-	})
-	if errTransaction != nil {
-		return nil, errTransaction
+	}()
+	if errApply != nil {
+		return nil, errApply
 	}
 	return record, nil
 }
@@ -277,7 +427,8 @@ func (r *Repository) UpdateOrganizationMember(ctx context.Context, orgID, member
 	ctx = contextOrBackground(ctx)
 	var record *OrganizationMemberRecord
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if _, errOrg := getOrganizationTx(ctx, tx, orgID); errOrg != nil {
+		org, errOrg := getOrganizationTx(ctx, tx, orgID)
+		if errOrg != nil {
 			return errOrg
 		}
 		if errLock := lockOrganizationOwnersTx(ctx, tx, orgID); errLock != nil {
@@ -300,10 +451,19 @@ func (r *Repository) UpdateOrganizationMember(ctx context.Context, orgID, member
 			}
 			record.Role = role
 		}
-		if errLimits := applyOrganizationMemberLimits(record, update); errLimits != nil {
+		if errLimits := applyOrganizationMemberLimits(record, org, update); errLimits != nil {
 			return errLimits
 		}
-		return tx.Save(record).Error
+		if errAccess := applyOrganizationMemberAccess(tx, record, org, update); errAccess != nil {
+			return errAccess
+		}
+		if errSave := tx.Save(record).Error; errSave != nil {
+			return errSave
+		}
+		if update.ModelGroups == nil {
+			return nil
+		}
+		return applyOrganizationMemberKeyScopeTx(tx, org, record)
 	})
 	if errTransaction != nil {
 		return nil, errTransaction
@@ -429,117 +589,6 @@ func ensureAnotherOrganizationOwnerTx(ctx context.Context, tx *gorm.DB, orgID, m
 	return nil
 }
 
-func applyOrganizationMemberLimits(record *OrganizationMemberRecord, update OrganizationMemberUpdate) error {
-	if errLimit := applyOptionalFloat(update.Limit1dCredits, &record.Limit1dCredits); errLimit != nil {
-		return periodLimitFieldError("limit_1d_credits", PeriodLimitErrInvalidLimit, fmt.Sprintf("limit_1d_credits: %s", errLimit.Error()))
-	}
-	if errLimit := applyOptionalFloat(update.Limit7dCredits, &record.Limit7dCredits); errLimit != nil {
-		return periodLimitFieldError("limit_7d_credits", PeriodLimitErrInvalidLimit, fmt.Sprintf("limit_7d_credits: %s", errLimit.Error()))
-	}
-	if errLimit := applyOptionalFloat(update.Limit30dCredits, &record.Limit30dCredits); errLimit != nil {
-		return periodLimitFieldError("limit_30d_credits", PeriodLimitErrInvalidLimit, fmt.Sprintf("limit_30d_credits: %s", errLimit.Error()))
-	}
-	return nil
-}
-
-func organizationMemberLimitsEnabled(member *OrganizationMemberRecord) bool {
-	return member != nil && (member.Limit1dCredits != nil || member.Limit7dCredits != nil || member.Limit30dCredits != nil)
-}
-
-// OrganizationMemberSpend returns rolling spend windows for one member.
-func (r *Repository) OrganizationMemberSpend(ctx context.Context, orgID, memberID uint, now time.Time) ([]OrganizationMemberSpendWindow, error) {
-	db, errDB := r.database()
-	if errDB != nil {
-		return nil, errDB
-	}
-	member, errMember := getOrganizationMemberTx(ctx, db, orgID, memberID, false)
-	if errMember != nil {
-		return nil, errMember
-	}
-	return organizationMemberSpendWindowsDB(ctx, db, member, now)
-}
-
-func organizationMemberSpendWindowsDB(ctx context.Context, db *gorm.DB, member *OrganizationMemberRecord, now time.Time) ([]OrganizationMemberSpendWindow, error) {
-	now = now.UTC()
-	defs := []struct {
-		id       string
-		limit    *float64
-		duration time.Duration
-	}{
-		{PeriodWindow1d, member.Limit1dCredits, periodLimit1dDuration},
-		{PeriodWindow7d, member.Limit7dCredits, periodLimit7dDuration},
-		{PeriodWindow30d, member.Limit30dCredits, periodLimit30dDuration},
-	}
-	since1d := now.Add(-periodLimit1dDuration)
-	since7d := now.Add(-periodLimit7dDuration)
-	since30d := now.Add(-periodLimit30dDuration)
-	var row struct {
-		Sum1d  float64 `gorm:"column:sum_1d"`
-		Sum7d  float64 `gorm:"column:sum_7d"`
-		Sum30d float64 `gorm:"column:sum_30d"`
-	}
-	errScan := db.WithContext(contextOrBackground(ctx)).Raw(`
-SELECT
-	COALESCE(SUM(CASE WHEN "billing_charge"."created_at" >= ? THEN "billing_charge"."amount" ELSE 0 END), 0) AS sum_1d,
-	COALESCE(SUM(CASE WHEN "billing_charge"."created_at" >= ? THEN "billing_charge"."amount" ELSE 0 END), 0) AS sum_7d,
-	COALESCE(SUM("billing_charge"."amount"), 0) AS sum_30d
-FROM "billing_charge"
-WHERE "billing_charge"."actor_user_id" = ?
-	AND "billing_charge"."user_id" = ?
-	AND "billing_charge"."created_at" >= ?
-`, since1d, since7d, member.MemberUserID, member.OrgUserID, since30d).Scan(&row).Error
-	if errScan != nil {
-		return nil, errScan
-	}
-	used := map[string]float64{PeriodWindow1d: row.Sum1d, PeriodWindow7d: row.Sum7d, PeriodWindow30d: row.Sum30d}
-	out := make([]OrganizationMemberSpendWindow, 0, len(defs))
-	for _, def := range defs {
-		out = append(out, OrganizationMemberSpendWindow{
-			ID:        def.id,
-			Limit:     def.limit,
-			Used:      used[def.id],
-			Remaining: remainingCredits(def.limit, used[def.id]),
-		})
-	}
-	return out, nil
-}
-
-// ensureOrganizationMemberKeyAllowed admits an organization key only while its
-// creator is still a member and within their spend limits.
-func ensureOrganizationMemberKeyAllowed(ctx context.Context, db *gorm.DB, record *APIKeyRecord, orgID uint) error {
-	memberID := normalizeOptionalUserID(record.CreatedByUserID)
-	if memberID == nil {
-		// Administrator-created organization keys only use organization limits.
-		return nil
-	}
-	member, errMember := getOrganizationMemberTx(ctx, db, orgID, *memberID, false)
-	if errors.Is(errMember, ErrOrganizationMemberNotFound) {
-		// Removal deletes keys; a stale key racing that delete must not bill the organization.
-		return fmt.Errorf("permission_denied: %s", homeerrors.MessageOrganizationMembershipRevoked)
-	}
-	if errMember != nil {
-		return errMember
-	}
-	if !organizationMemberLimitsEnabled(member) {
-		return nil
-	}
-	windows, errWindows := organizationMemberSpendWindowsDB(ctx, db, member, time.Now())
-	if errWindows != nil {
-		return errWindows
-	}
-	for _, window := range windows {
-		if window.Limit == nil {
-			continue
-		}
-		if *window.Limit == 0 || window.Used >= *window.Limit || math.IsNaN(window.Used) {
-			return fmt.Errorf("%s: %s (window=%s mode=sliding used=%g limit=%g)",
-				homeerrors.TypeUserPeriodLimitExceeded, homeerrors.MessageOrganizationMemberLimitExceeded,
-				window.ID, window.Used, *window.Limit)
-		}
-	}
-	return nil
-}
-
 // OrganizationAPIKeyScope restricts organization key mutations to one member's
 // keys. A nil MemberUserID grants owner/administrator scope over every key.
 type OrganizationAPIKeyScope struct {
@@ -569,24 +618,36 @@ func (r *Repository) ListOrganizationAPIKeys(ctx context.Context, scope Organiza
 }
 
 // CreateOrganizationAPIKey creates a key billed to the organization and owned by a member.
-// Model groups default to the organization's configured groups, never to the member's.
+// Model groups are the member subset when set, otherwise the organization's groups;
+// they never come from the member's personal keys.
 func (r *Repository) CreateOrganizationAPIKey(ctx context.Context, orgID, memberID uint, update APIKeyUserUpdate) (*APIKeyRecord, error) {
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
 	}
-	if _, errMember := getOrganizationMemberTx(ctx, db, orgID, memberID, false); errMember != nil {
+	org, errOrg := getOrganizationTx(ctx, db, orgID)
+	if errOrg != nil {
+		return nil, errOrg
+	}
+	member, errMember := getOrganizationMemberTx(ctx, db, orgID, memberID, false)
+	if errMember != nil {
 		return nil, errMember
 	}
-	if update.ModelGroups == nil {
-		groups, errGroups := r.OrganizationModelGroups(ctx, orgID)
-		if errGroups != nil {
-			return nil, errGroups
-		}
-		update.ModelGroups = &groups
+	groups, errGroups := effectiveOrganizationMemberModelGroups(org, member)
+	if errGroups != nil {
+		return nil, errGroups
 	}
+	update.ModelGroups = &groups
 	update.Channels = nil
 	update.CreatedByUserID = &memberID
+	update.beforeCreate = func(ctx context.Context, tx *gorm.DB) error {
+		// Re-read under the key mutation lock so concurrent creates respect max_api_keys.
+		current, errCurrent := getOrganizationMemberTx(ctx, tx, orgID, memberID, false)
+		if errCurrent != nil {
+			return errCurrent
+		}
+		return ensureOrganizationMemberKeyCapacityTx(ctx, tx, current)
+	}
 	return r.CreateAPIKeyForUser(ctx, orgID, update)
 }
 
@@ -665,9 +726,11 @@ func (r *Repository) SetOrganizationModelGroups(ctx context.Context, orgID uint,
 		if errUpdate := tx.Model(&UserRecord{}).Where("id = ?", orgID).Update("organization_model_groups", groupsJSON).Error; errUpdate != nil {
 			return errUpdate
 		}
-		result := tx.Model(&APIKeyRecord{}).Where("user_id = ?", orgID).Update("model_groups", groupsJSON)
-		if result.Error != nil {
-			return result.Error
+		if errMembers := reconcileOrganizationMemberScopesTx(tx, orgID, groups); errMembers != nil {
+			return errMembers
+		}
+		if errKeys := applyOrganizationKeyScopesTx(ctx, tx, orgID); errKeys != nil {
+			return errKeys
 		}
 		return appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano())
 	})
@@ -675,6 +738,23 @@ func (r *Repository) SetOrganizationModelGroups(ctx context.Context, orgID uint,
 		return nil, errTransaction
 	}
 	return groups, nil
+}
+
+// SetOrganizationMemberKeysAllowed controls whether regular members may create
+// their own organization keys. Existing keys are kept.
+func (r *Repository) SetOrganizationMemberKeysAllowed(ctx context.Context, orgID uint, allowed bool) (*UserRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	ctx = contextOrBackground(ctx)
+	if _, errOrg := getOrganizationTx(ctx, db, orgID); errOrg != nil {
+		return nil, errOrg
+	}
+	if errUpdate := db.WithContext(ctx).Model(&UserRecord{}).Where("id = ?", orgID).Update("organization_member_keys_disabled", !allowed).Error; errUpdate != nil {
+		return nil, errUpdate
+	}
+	return getOrganizationTx(ctx, db, orgID)
 }
 
 func organizationModelGroupsFromRecord(org *UserRecord) ([]uint, error) {

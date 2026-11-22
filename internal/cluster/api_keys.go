@@ -52,6 +52,9 @@ type APIKeyUserUpdate struct {
 	// CreatedByUserID attributes an organization key to the member who owns it.
 	// It is only applied when a key is created.
 	CreatedByUserID *uint
+	// beforeCreate runs inside the create transaction after the key mutation
+	// lock, so organization checks such as key caps cannot race other creates.
+	beforeCreate func(ctx context.Context, tx *gorm.DB) error
 }
 
 type APIKeySelector struct {
@@ -580,6 +583,11 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
 			return errLock
+		}
+		if update.beforeCreate != nil {
+			if errBefore := update.beforeCreate(ctx, tx); errBefore != nil {
+				return errBefore
+			}
 		}
 		if errGroups := ensureAPIKeyGroupsNotDeleted(tx, update.Channels, update.ModelGroups); errGroups != nil {
 			return errGroups

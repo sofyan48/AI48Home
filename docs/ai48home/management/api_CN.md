@@ -1358,11 +1358,11 @@ HTTP 200 返回 `{"user": <管理用户对象>}`。用户列表/详情对象及�
 
 组织是团队共享的计费账户，存储为 `kind: "organization"` 的 `user` 记录，拥有与用户相同的余额、周期限额、`billing_multiplier` 和模型组，但永远无法登录。只有管理员可以创建组织。`GET /users` 只返回个人用户，组织通过 `GET /organizations` 列出。
 
-成员角色：`owner` 管理成员、成员消费限额、全部组织 Key、账本与充值申请；`member` 只能使用自己的组织 Key 并只能看到自己的用量。一个用户可以加入多个组织；每个组织至少保留一个 owner（否则返回 409 `last_owner`）。
+成员角色：`owner` 管理成员、成员消费限额、全部组织 Key、账本与充值申请；`member` 只能使用自己的组织 Key 并只能看到自己的用量。一个用户可以加入多个组织；每个组织至少保留一个 owner（否则返回 409 `last_owner`），包括通过 `DELETE /users/:id` 删除唯一 owner 的账户。`POST /organizations` 在同一事务中创建组织、首个 owner、模型组与 `allow_member_keys`，任一步骤失败则不会创建组织。
 
 组织 Key 的 `user_id` 为组织，`created_by_user_id` 为所属成员；扣费记在组织上，并在 `billing_charge.actor_user_id` 记录成员。移除成员或删除该用户账户会删除其创建的组织 Key；删除组织会删除全部成员关系与 Key。个人 Key 不受影响。
 
-准入顺序：组织余额 → 组织周期限额 → Key 所属者仍是成员 → 成员滚动消费限额（`1d`/`7d`/`30d`）。超限沿用 `user_period_limit_exceeded`（HTTP 429），非成员 Key 返回 `permission_denied`。充值沿用现有账单接口，以组织 ID 作为 `user_id`。
+准入顺序：组织余额 → 组织周期限额 → Key 所属者仍是成员 → 成员消费限额（`5h`/`1d`/`7d`/`30d`）。成员窗口模式 `window_mode_*` 支持 `sliding`（默认）、`first_use` 与 `calendar`（`5h` 不支持；按组织时区与周重置设置计算）。成员限额不得高于组织同一窗口的限额（400，`exceeds_organization_limit`）。`allow_member_keys`（默认 `true`）为 `false` 时，普通成员不能自行创建组织 Key，由 owner 或管理员代为创建。成员 `model_groups` 必须是组织模型组的子集（`[]` 继承组织），修改后会同步到该成员已有的组织 Key；缩小组织模型组时会裁剪成员子集，若导致某成员子集为空则返回 409 `member_model_groups_conflict`。`max_api_keys` 限制成员的组织 Key 数量（`null` 不限），超出返回 409 `member_key_limit`，个人 Key 不计入。超限沿用 `user_period_limit_exceeded`（HTTP 429），非成员 Key 返回 `permission_denied`。充值沿用现有账单接口，以组织 ID 作为 `user_id`。
 
 接口：`GET/POST /organizations`、`GET/PATCH/DELETE /organizations/:id`、`POST /organizations/:id/members`、`PATCH/DELETE /organizations/:id/members/:user_id`、`GET/POST /organizations/:id/api-keys`、`DELETE /organizations/:id/api-keys/:key_id`、`GET /users/:id/organizations`。字段与英文文档 `api.md` 的 Organizations 章节一致。
 

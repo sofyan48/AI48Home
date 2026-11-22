@@ -202,6 +202,7 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `DELETE` | `/api-key/:id` |
 | `GET` | `/organizations` |
 | `GET` | `/organizations/:org_id` |
+| `PATCH` | `/organizations/:org_id` |
 | `GET` | `/organizations/:org_id/members` |
 | `POST` | `/organizations/:org_id/members` |
 | `PATCH` | `/organizations/:org_id/members/:user_id` |
@@ -1283,6 +1284,8 @@ Authorization: Bearer user.jwt.token
 角色：`owner` 可查看组织全部数据并管理成员、成员限额、全部 Key 与充值；`member` 只能查看自己的 Key、扣费、统计与请求日志，访问仅 owner 接口返回 403 `organization_owner_required`。
 
 接口与字段与英文文档 `api.md` 的 Organizations 章节一致。成员超出消费限额时请求返回 429，离开组织后其 Key 被删除。
+
+成员限额支持 `5h`/`1d`/`7d`/`30d` 与 `window_mode_*`（`sliding` 默认、`first_use`、`calendar`，`5h` 不支持 `calendar`），不得高于组织同窗口限额（400 `exceeds_organization_limit`）。owner 可通过 `PATCH /organizations/:org_id` 设置 `{"allow_member_keys": false}`，此时普通成员创建组织 Key 返回 403 `organization_member_keys_disabled`，owner 仍可用 `member_user_id` 代为创建；个人 Key 不受影响。`GET /organizations/:org_id` 返回 `allow_member_keys` 与 `can_create_keys`；owner 还会得到 `model_group_options`。成员可设置 `model_groups`（组织模型组子集，否则 400 `invalid_model_groups`）与 `max_api_keys`（非负整数或 `null`，否则 400 `invalid_key_limit`）；达到上限后创建组织 Key 返回 409 `member_key_limit`。成员列表包含 `key_count`。
 
 ## API Keys
 

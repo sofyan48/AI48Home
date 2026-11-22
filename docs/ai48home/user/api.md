@@ -202,6 +202,7 @@ The table below is extracted from the User API route group registered by `intern
 | `DELETE` | `/api-key/:id` |
 | `GET` | `/organizations` |
 | `GET` | `/organizations/:org_id` |
+| `PATCH` | `/organizations/:org_id` |
 | `GET` | `/organizations/:org_id/members` |
 | `POST` | `/organizations/:org_id/members` |
 | `PATCH` | `/organizations/:org_id/members/:user_id` |
@@ -1331,6 +1332,7 @@ Roles: `owner` sees organization-wide data and manages members, member limits, a
 | --- | --- | --- |
 | `GET /organizations` | yes | yes |
 | `GET /organizations/:org_id` | balance + own limits | own limits only |
+| `PATCH /organizations/:org_id` | yes | no |
 | `GET/POST /organizations/:org_id/members`, `PATCH .../members/:user_id` | yes | no |
 | `DELETE /organizations/:org_id/members/:user_id` | any member | self (leave) only |
 | `GET/POST/PATCH/DELETE /organizations/:org_id/api-keys...` | all keys | own keys |
@@ -1344,19 +1346,23 @@ Returns `{"organizations": [{id, name, role}]}`.
 
 ### GET `/organizations/:org_id`
 
-Returns `{"organization": {id, name, role, spend_limits}}`; owners also get `credits` and `credits_unlimited`. `spend_limits` lists the caller's rolling windows `1d`, `7d`, `30d` as `{id, limit, used, remaining}` (`limit`/`remaining` are `null` when unlimited).
+Returns `{"organization": {id, name, role, spend_limits, allow_member_keys, can_create_keys}}`; owners also get `credits`, `credits_unlimited`, `organization_limits` (`limit_5h_credits`, `limit_1d_credits`, `limit_7d_credits`, `limit_30d_credits` of the organization) and `model_group_options` (`[{id, name}]`, the groups an owner may assign to members). `spend_limits` lists the caller's windows `5h`, `1d`, `7d`, `30d` as `{id, limit, used, remaining, mode, active, reset_at}` (`limit`/`remaining` are `null` when unlimited; `reset_at` is `null` for `sliding` windows and inactive `first_use` windows). `can_create_keys` is `false` for members when the organization disables member keys.
+
+### PATCH `/organizations/:org_id`
+
+Owner only. `{"allow_member_keys": false}` stops regular members from creating their own organization keys; owners can still create keys for themselves and for members with `member_user_id`. Existing keys are kept. Returns `{"organization": {id, name, allow_member_keys}}`. Personal keys (`/api-keys`) are never affected.
 
 ### Members (owner)
 
-- `GET /organizations/:org_id/members` returns `{"members": [{user_id, username, role, limit_1d_credits, limit_7d_credits, limit_30d_credits, spend_30d, requests_30d, created_at}]}`.
-- `POST /organizations/:org_id/members` with `{"username": "bob", "role": "member", "limit_30d_credits": 50}` adds an existing approved personal user.
-- `PATCH /organizations/:org_id/members/:user_id` updates `role` and limit fields (`null` clears).
+- `GET /organizations/:org_id/members` returns `{"members": [{user_id, username, role, limit_5h_credits, window_mode_5h, limit_1d_credits, window_mode_1d, limit_7d_credits, window_mode_7d, limit_30d_credits, window_mode_30d, model_groups, max_api_keys, key_count, spend_30d, requests_30d, created_at}]}`.
+- `POST /organizations/:org_id/members` with `{"username": "bob", "role": "member", "limit_5h_credits": 2, "window_mode_5h": "first_use", "limit_30d_credits": 50, "window_mode_30d": "calendar"}` adds an existing approved personal user. Window modes are `sliding` (default), `first_use` or `calendar` (not for `5h`); calendar windows use the organization timezone. A member limit above the organization limit for the same window returns HTTP 400 `exceeds_organization_limit`; other invalid limits or modes return 400 `invalid_limit`. `model_groups` restricts the member's organization keys to a subset of `model_group_options` (`[]` inherits the organization scope; others return 400 `invalid_model_groups`) and rewrites their existing keys. `max_api_keys` caps the member's organization keys (non-negative integer or `null`; invalid values return 400 `invalid_key_limit`).
+- `PATCH /organizations/:org_id/members/:user_id` updates `role`, limit fields (`null` clears), `window_mode_*`, `model_groups` and `max_api_keys`.
 - `DELETE /organizations/:org_id/members/:user_id` removes a member (or the caller leaves). Their organization keys are deleted. The last owner cannot leave (409 `last_owner`).
 
 ### Organization API keys
 
 - `GET /organizations/:org_id/api-keys` returns the API key shape of `GET /api-keys` plus `created_by_user_id`.
-- `POST /organizations/:org_id/api-keys` with optional `display_name` and `api_key` creates a key billed to the organization and owned by the caller. Owners may pass `member_user_id` to create a key for another member. Keys inherit the organization model groups; channel/model-group bindings are administrator-managed.
+- `POST /organizations/:org_id/api-keys` with optional `display_name` and `api_key` creates a key billed to the organization and owned by the caller. Owners may pass `member_user_id` to create a key for another member. When the organization disables member keys, members receive HTTP 403 `organization_member_keys_disabled`. Keys use the owning member's `model_groups` subset when set. A member at `max_api_keys` gets HTTP 409 `member_key_limit`, also when an owner creates the key for them. Keys inherit the organization model groups; channel/model-group bindings are administrator-managed.
 - `PATCH /organizations/:org_id/api-keys/:key_id` updates `display_name` or rotates `api_key`.
 - `DELETE /organizations/:org_id/api-keys/:key_id` deletes a key.
 

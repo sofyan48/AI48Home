@@ -903,6 +903,11 @@ func (r *Repository) createBillingChargeForUsageTx(ctx context.Context, tx *gorm
 	if errOpen := openUserFirstUseWindowsOnChargeTx(ctx, tx, *userID, charge.CreatedAt); errOpen != nil {
 		return errOpen
 	}
+	if actorID := normalizeOptionalUserID(charge.ActorUserID); actorID != nil {
+		if errOpen := openOrganizationMemberFirstUseWindowsOnChargeTx(ctx, tx, *userID, *actorID, charge.CreatedAt); errOpen != nil {
+			return errOpen
+		}
+	}
 
 	balanceBefore, balanceAfter, errCredits := billingApplyUserCreditDeltaTx(ctx, tx, *userID, -amount)
 	if errCredits != nil {

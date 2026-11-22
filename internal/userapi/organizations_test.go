@@ -210,3 +210,85 @@ func TestOrganizationOwnerAndMemberPermissions(t *testing.T) {
 	}
 	expectStatus(t, env.do(t, env.member, http.MethodGet, base, ""), http.StatusNotFound)
 }
+
+func TestOrganizationMemberKeysToggleAndWindowModes(t *testing.T) {
+	env, closeRepo := newOrgTestEnv(t)
+	defer closeRepo()
+	base := fmt.Sprintf("/user/organizations/%d", env.org.ID)
+
+	add := env.do(t, env.owner, http.MethodPost, base+"/members", `{"username":"member","limit_5h_credits":1,"window_mode_5h":"first_use","limit_7d_credits":4,"window_mode_7d":"calendar"}`)
+	expectStatus(t, add, http.StatusOK)
+	if !strings.Contains(add.Body.String(), `"window_mode_5h":"first_use"`) || !strings.Contains(add.Body.String(), `"window_mode_1d":"sliding"`) {
+		t.Fatalf("member window modes = %s", add.Body.String())
+	}
+	expectStatus(t, env.do(t, env.owner, http.MethodPatch, fmt.Sprintf("%s/members/%d", base, env.member.ID), `{"window_mode_5h":"calendar"}`), http.StatusBadRequest)
+
+	// Members cannot change organization settings.
+	expectStatus(t, env.do(t, env.member, http.MethodPatch, base, `{"allow_member_keys":false}`), http.StatusForbidden)
+	disabled := env.do(t, env.owner, http.MethodPatch, base, `{"allow_member_keys":false}`)
+	expectStatus(t, disabled, http.StatusOK)
+	if !strings.Contains(disabled.Body.String(), `"allow_member_keys":false`) {
+		t.Fatalf("settings response = %s", disabled.Body.String())
+	}
+
+	summary := env.do(t, env.member, http.MethodGet, base, "")
+	if !strings.Contains(summary.Body.String(), `"can_create_keys":false`) {
+		t.Fatalf("member summary = %s", summary.Body.String())
+	}
+	expectStatus(t, env.do(t, env.member, http.MethodPost, base+"/api-keys", `{}`), http.StatusForbidden)
+	// Owners still create keys for themselves and on behalf of members.
+	expectStatus(t, env.do(t, env.owner, http.MethodPost, base+"/api-keys", `{}`), http.StatusOK)
+	issued := env.do(t, env.owner, http.MethodPost, base+"/api-keys", fmt.Sprintf(`{"member_user_id":%d,"display_name":"issued"}`, env.member.ID))
+	expectStatus(t, issued, http.StatusOK)
+	memberKeys := env.do(t, env.member, http.MethodGet, base+"/api-keys", "")
+	if !strings.Contains(memberKeys.Body.String(), "issued") {
+		t.Fatalf("member key list = %s", memberKeys.Body.String())
+	}
+	// Personal keys stay independent of the organization setting.
+	expectStatus(t, env.do(t, env.member, http.MethodPost, "/user/api-keys", `{"display_name":"personal"}`), http.StatusOK)
+
+	expectStatus(t, env.do(t, env.owner, http.MethodPatch, base, `{"allow_member_keys":true}`), http.StatusOK)
+	expectStatus(t, env.do(t, env.member, http.MethodPost, base+"/api-keys", `{}`), http.StatusOK)
+}
+
+func TestOrganizationMemberModelGroupsAndKeyCap(t *testing.T) {
+	env, closeRepo := newOrgTestEnv(t)
+	defer closeRepo()
+	ctx := context.Background()
+	base := fmt.Sprintf("/user/organizations/%d", env.org.ID)
+	cheap, _ := env.handler.repo.CreateModelGroup(ctx, "cheap", false)
+	premium, _ := env.handler.repo.CreateModelGroup(ctx, "premium", false)
+	if _, errScope := env.handler.repo.SetOrganizationModelGroups(ctx, env.org.ID, []uint{cheap.ID, premium.ID}); errScope != nil {
+		t.Fatal(errScope)
+	}
+
+	summary := env.do(t, env.owner, http.MethodGet, base, "")
+	if !strings.Contains(summary.Body.String(), `"model_group_options":[{"id":`) || !strings.Contains(summary.Body.String(), `"name":"premium"`) {
+		t.Fatalf("owner summary options = %s", summary.Body.String())
+	}
+	if member := env.do(t, env.member, http.MethodGet, base, ""); strings.Contains(member.Body.String(), "model_group_options") {
+		t.Fatalf("non-member summary leaked options: %s", member.Body.String())
+	}
+
+	add := env.do(t, env.owner, http.MethodPost, base+"/members", fmt.Sprintf(`{"username":"member","model_groups":[%d],"max_api_keys":1}`, cheap.ID))
+	expectStatus(t, add, http.StatusOK)
+	if !strings.Contains(add.Body.String(), fmt.Sprintf(`"model_groups":[%d]`, cheap.ID)) || !strings.Contains(add.Body.String(), `"max_api_keys":1`) {
+		t.Fatalf("add member = %s", add.Body.String())
+	}
+	expectStatus(t, env.do(t, env.owner, http.MethodPatch, fmt.Sprintf("%s/members/%d", base, env.member.ID), `{"model_groups":[999999]}`), http.StatusBadRequest)
+	expectStatus(t, env.do(t, env.owner, http.MethodPatch, fmt.Sprintf("%s/members/%d", base, env.member.ID), `{"max_api_keys":1.5}`), http.StatusBadRequest)
+
+	first := env.do(t, env.member, http.MethodPost, base+"/api-keys", `{}`)
+	expectStatus(t, first, http.StatusOK)
+	if !strings.Contains(first.Body.String(), fmt.Sprintf(`"model_groups":[%d]`, cheap.ID)) {
+		t.Fatalf("member key scope = %s", first.Body.String())
+	}
+	expectStatus(t, env.do(t, env.member, http.MethodPost, base+"/api-keys", `{}`), http.StatusConflict)
+	// Owners issuing keys on behalf of the member hit the same cap.
+	expectStatus(t, env.do(t, env.owner, http.MethodPost, base+"/api-keys", fmt.Sprintf(`{"member_user_id":%d}`, env.member.ID)), http.StatusConflict)
+
+	members := env.do(t, env.owner, http.MethodGet, base+"/members", "")
+	if !strings.Contains(members.Body.String(), `"key_count":1`) {
+		t.Fatalf("members = %s", members.Body.String())
+	}
+}

@@ -25,15 +25,23 @@ type organizationWriteRequest struct {
 	Limit30d          optionalJSONFloat `json:"limit_30d_credits"`
 	ModelGroups       *[]uint           `json:"model_groups"`
 	OwnerUserID       *uint             `json:"owner_user_id"`
+	AllowMemberKeys   *bool             `json:"allow_member_keys"`
 }
 
 type organizationMemberWriteRequest struct {
-	UserID   *uint             `json:"user_id"`
-	Username *string           `json:"username"`
-	Role     *string           `json:"role"`
-	Limit1d  optionalJSONFloat `json:"limit_1d_credits"`
-	Limit7d  optionalJSONFloat `json:"limit_7d_credits"`
-	Limit30d optionalJSONFloat `json:"limit_30d_credits"`
+	UserID        *uint             `json:"user_id"`
+	Username      *string           `json:"username"`
+	Role          *string           `json:"role"`
+	Limit5h       optionalJSONFloat `json:"limit_5h_credits"`
+	WindowMode5h  *string           `json:"window_mode_5h"`
+	Limit1d       optionalJSONFloat `json:"limit_1d_credits"`
+	WindowMode1d  *string           `json:"window_mode_1d"`
+	Limit7d       optionalJSONFloat `json:"limit_7d_credits"`
+	WindowMode7d  *string           `json:"window_mode_7d"`
+	Limit30d      optionalJSONFloat `json:"limit_30d_credits"`
+	WindowMode30d *string           `json:"window_mode_30d"`
+	ModelGroups   *[]uint           `json:"model_groups"`
+	MaxAPIKeys    optionalJSONFloat `json:"max_api_keys"`
 }
 
 type organizationAPIKeyWriteRequest struct {
@@ -100,8 +108,13 @@ func (h *Handler) GetOrganization(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "billing_recharge_request_load_failed", errPending)
 		return
 	}
+	keyCounts, errCounts := h.repo.OrganizationMemberKeyCounts(ctx, id)
+	if errCounts != nil {
+		respondOrganizationError(c, "organization_load_failed", errCounts)
+		return
+	}
 	item := organizationResponse(org)
-	item["members"] = organizationMembersResponse(members, spend)
+	item["members"] = organizationMembersResponse(members, spend, keyCounts)
 	item["pending_topup"] = pendingTopupResponse(pending[id])
 	c.JSON(http.StatusOK, gin.H{"organization": item})
 }
@@ -119,36 +132,16 @@ func (h *Handler) CreateOrganization(c *gin.Context) {
 	}
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
-	org, errCreate := h.repo.CreateOrganization(ctx, organizationUserUpdate(body))
+	// One transaction: a failed owner or model-group step leaves no organization behind.
+	org, errCreate := h.repo.CreateOrganizationWithSetup(ctx, organizationUserUpdate(body), cluster.OrganizationSetup{
+		OwnerUserID: body.OwnerUserID, ModelGroups: body.ModelGroups, AllowMemberKeys: body.AllowMemberKeys,
+	})
 	if errCreate != nil {
-		if cluster.IsUserConflictError(errCreate) {
-			respondError(c, http.StatusConflict, "organization_exists", errCreate)
-			return
-		}
 		if respondUserPeriodLimitValidationError(c, errCreate) {
 			return
 		}
-		respondError(c, http.StatusInternalServerError, "organization_create_failed", errCreate)
+		respondOrganizationError(c, "organization_create_failed", errCreate)
 		return
-	}
-	if body.OwnerUserID != nil {
-		owner := cluster.OrganizationRoleOwner
-		if _, errOwner := h.repo.AddOrganizationMember(ctx, org.ID, *body.OwnerUserID, cluster.OrganizationMemberUpdate{Role: &owner}); errOwner != nil {
-			// Roll back so a failed owner assignment never leaves an ownerless organization.
-			if errDelete := h.repo.DeleteOrganization(ctx, org.ID); errDelete != nil {
-				respondError(c, http.StatusInternalServerError, "organization_create_failed", errDelete)
-				return
-			}
-			respondOrganizationError(c, "organization_create_failed", errOwner)
-			return
-		}
-	}
-	if body.ModelGroups != nil {
-		if _, errGroups := h.repo.SetOrganizationModelGroups(ctx, org.ID, *body.ModelGroups); errGroups != nil {
-			respondOrganizationError(c, "organization_create_failed", errGroups)
-			return
-		}
-		org, _ = h.repo.GetOrganization(ctx, org.ID)
 	}
 	c.JSON(http.StatusOK, gin.H{"organization": organizationResponse(org)})
 }
@@ -192,6 +185,14 @@ func (h *Handler) UpdateOrganization(c *gin.Context) {
 			return
 		}
 		org, _ = h.repo.GetOrganization(ctx, id)
+	}
+	if body.AllowMemberKeys != nil {
+		updated, errAllow := h.repo.SetOrganizationMemberKeysAllowed(ctx, id, *body.AllowMemberKeys)
+		if errAllow != nil {
+			respondOrganizationError(c, "organization_update_failed", errAllow)
+			return
+		}
+		org = updated
 	}
 	c.JSON(http.StatusOK, gin.H{"organization": organizationResponse(org)})
 }
@@ -443,9 +444,16 @@ func organizationUserUpdate(body organizationWriteRequest) cluster.UserUpdate {
 func organizationMemberUpdate(body organizationMemberWriteRequest) cluster.OrganizationMemberUpdate {
 	return cluster.OrganizationMemberUpdate{
 		Role:            body.Role,
+		Limit5hCredits:  optionalFloatToUpdate(body.Limit5h),
+		WindowMode5h:    body.WindowMode5h,
 		Limit1dCredits:  optionalFloatToUpdate(body.Limit1d),
+		WindowMode1d:    body.WindowMode1d,
 		Limit7dCredits:  optionalFloatToUpdate(body.Limit7d),
+		WindowMode7d:    body.WindowMode7d,
 		Limit30dCredits: optionalFloatToUpdate(body.Limit30d),
+		WindowMode30d:   body.WindowMode30d,
+		ModelGroups:     body.ModelGroups,
+		MaxAPIKeys:      cluster.OptionalIntFromFloat(optionalFloatToUpdate(body.MaxAPIKeys)),
 	}
 }
 
@@ -463,10 +471,11 @@ func organizationResponse(org *cluster.UserRecord) gin.H {
 		groups = []uint{}
 	}
 	item["model_groups"] = groups
+	item["allow_member_keys"] = !org.OrganizationMemberKeysDisabled
 	return item
 }
 
-func organizationMembersResponse(members []cluster.OrganizationMember, spend []cluster.OrganizationMemberSpendSummary) []gin.H {
+func organizationMembersResponse(members []cluster.OrganizationMember, spend []cluster.OrganizationMemberSpendSummary, keyCounts map[uint]int64) []gin.H {
 	spent := make(map[uint]cluster.OrganizationMemberSpendSummary, len(spend))
 	for _, row := range spend {
 		spent[row.MemberUserID] = row
@@ -477,6 +486,7 @@ func organizationMembersResponse(members []cluster.OrganizationMember, spend []c
 		item["username"] = members[index].Username
 		item["spend_30d"] = spent[members[index].MemberUserID].Amount
 		item["requests_30d"] = spent[members[index].MemberUserID].RequestCount
+		item["key_count"] = keyCounts[members[index].MemberUserID]
 		items = append(items, item)
 	}
 	return items
@@ -486,16 +496,13 @@ func organizationMemberRecordResponse(member *cluster.OrganizationMemberRecord) 
 	if member == nil {
 		return gin.H{}
 	}
-	return gin.H{
-		"organization_id":   member.OrgUserID,
-		"user_id":           member.MemberUserID,
-		"role":              member.Role,
-		"limit_1d_credits":  member.Limit1dCredits,
-		"limit_7d_credits":  member.Limit7dCredits,
-		"limit_30d_credits": member.Limit30dCredits,
-		"created_at":        member.CreatedAt,
-		"updated_at":        member.UpdatedAt,
-	}
+	item := cluster.OrganizationMemberLimitFields(member)
+	item["organization_id"] = member.OrgUserID
+	item["user_id"] = member.MemberUserID
+	item["role"] = member.Role
+	item["created_at"] = member.CreatedAt
+	item["updated_at"] = member.UpdatedAt
+	return item
 }
 
 func organizationAPIKeyResponse(record *cluster.APIKeyRecord) gin.H {
@@ -535,8 +542,13 @@ func respondOrganizationError(c *gin.Context, code string, err error) {
 	case errors.Is(err, cluster.ErrOrganizationLastOwner):
 		respondError(c, http.StatusConflict, "last_owner", err)
 	case errors.Is(err, cluster.ErrOrganizationInvalidMember), errors.Is(err, cluster.ErrOrganizationInvalidRole),
-		errors.Is(err, cluster.ErrDeletedAccessGroup), errors.Is(err, cluster.ErrInvalidAPIKeyDisplayName):
+		errors.Is(err, cluster.ErrDeletedAccessGroup), errors.Is(err, cluster.ErrInvalidAPIKeyDisplayName),
+		errors.Is(err, cluster.ErrOrganizationMemberModelGroups), errors.Is(err, cluster.ErrOrganizationInvalidKeyLimit):
 		respondError(c, http.StatusBadRequest, "invalid body", err)
+	case errors.Is(err, cluster.ErrOrganizationModelGroupsConflict):
+		respondError(c, http.StatusConflict, "member_model_groups_conflict", err)
+	case errors.Is(err, cluster.ErrOrganizationMemberKeyLimit):
+		respondError(c, http.StatusConflict, "member_key_limit", err)
 	case cluster.IsUserConflictError(err):
 		respondError(c, http.StatusConflict, "organization_exists", err)
 	default:

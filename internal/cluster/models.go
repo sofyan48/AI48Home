@@ -338,21 +338,24 @@ type UserRecord struct {
 	// rows) and UserKindPersonal both mean a login-capable personal user.
 	Kind string `gorm:"column:kind;type:varchar(16);index"`
 	// OrganizationModelGroups is the model-group scope applied to organization keys.
-	OrganizationModelGroups JSONB      `gorm:"column:organization_model_groups"`
-	Username                string     `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`
-	Password                string     `gorm:"column:password;type:text"`
-	Email                   *string    `gorm:"column:email;type:text;index"`
-	EmailVerifiedAt         *time.Time `gorm:"column:email_verified_at"`
-	EmailVersion            uint64     `gorm:"column:email_version;not null;default:0"`
-	SessionVersion          uint64     `gorm:"column:session_version;not null;default:0"`
-	Credits                 float64    `gorm:"column:credits;not null;default:0"`
-	CreditsUnlimited        bool       `gorm:"column:credits_unlimited;not null;default:false"`
-	Timezone                string     `gorm:"column:timezone;not null;default:Asia/Shanghai"`
-	ResetAllowanceMode      string     `gorm:"column:reset_allowance_mode;not null;default:''"`
-	ResetAllowanceAmount    int64      `gorm:"column:reset_allowance_amount;not null;default:0"`
-	ResetAllowanceAvailable int64      `gorm:"column:reset_allowance_available;not null;default:0"`
-	ResetAllowanceExpiresAt *time.Time `gorm:"column:reset_allowance_expires_at"`
-	ResetAllowanceRenewsAt  *time.Time `gorm:"column:reset_allowance_renews_at"`
+	OrganizationModelGroups JSONB `gorm:"column:organization_model_groups"`
+	// OrganizationMemberKeysDisabled stops regular members from creating their own
+	// organization keys; owners can still issue keys on their behalf.
+	OrganizationMemberKeysDisabled bool       `gorm:"column:organization_member_keys_disabled;not null;default:false"`
+	Username                       string     `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`
+	Password                       string     `gorm:"column:password;type:text"`
+	Email                          *string    `gorm:"column:email;type:text;index"`
+	EmailVerifiedAt                *time.Time `gorm:"column:email_verified_at"`
+	EmailVersion                   uint64     `gorm:"column:email_version;not null;default:0"`
+	SessionVersion                 uint64     `gorm:"column:session_version;not null;default:0"`
+	Credits                        float64    `gorm:"column:credits;not null;default:0"`
+	CreditsUnlimited               bool       `gorm:"column:credits_unlimited;not null;default:false"`
+	Timezone                       string     `gorm:"column:timezone;not null;default:Asia/Shanghai"`
+	ResetAllowanceMode             string     `gorm:"column:reset_allowance_mode;not null;default:''"`
+	ResetAllowanceAmount           int64      `gorm:"column:reset_allowance_amount;not null;default:0"`
+	ResetAllowanceAvailable        int64      `gorm:"column:reset_allowance_available;not null;default:0"`
+	ResetAllowanceExpiresAt        *time.Time `gorm:"column:reset_allowance_expires_at"`
+	ResetAllowanceRenewsAt         *time.Time `gorm:"column:reset_allowance_renews_at"`
 	// BillingMultiplier scales every charge for the user; NULL means 1.
 	BillingMultiplier *float64 `gorm:"column:billing_multiplier"`
 	// Period cost limits (null = disabled). Subject is user; all API keys inherit.
