@@ -173,7 +173,7 @@ func (h *Handler) UpdateOrganization(c *gin.Context) {
 		respondOrganizationError(c, "organization_update_failed", errOrg)
 		return
 	}
-	org, errUpdate := h.repo.UpdateUser(ctx, id, organizationUserUpdate(body))
+	org, errUpdate := h.repo.UpdateOrganization(ctx, id, organizationUserUpdate(body))
 	if errUpdate != nil {
 		if respondUserPeriodLimitValidationError(c, errUpdate) {
 			return

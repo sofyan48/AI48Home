@@ -31,18 +31,16 @@ type BillingRechargeRequestRecord struct {
 
 func (BillingRechargeRequestRecord) TableName() string { return "billing_recharge_request" }
 
-// SQLite must acquire its write lock before any reads; PostgreSQL locks the user row.
+// SQLite must acquire its write lock before any reads; PostgreSQL locks the payer row.
 func lockBillingUserTx(tx *gorm.DB, userID uint) (*UserRecord, error) {
 	if tx.Dialector.Name() == "sqlite" {
-		if errLock := tx.Model(&UserRecord{}).Where("id = ?", userID).UpdateColumn("credits", gorm.Expr("credits")).Error; errLock != nil {
-			return nil, errLock
+		for _, table := range []string{"user", "organization"} {
+			if errLock := tx.Table(table).Where("id = ? AND deleted_at IS NULL", userID).UpdateColumn("credits", gorm.Expr("credits")).Error; errLock != nil {
+				return nil, errLock
+			}
 		}
 	}
-	user := &UserRecord{}
-	if errLoad := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(user, "id = ?", userID).Error; errLoad != nil {
-		return nil, errLoad
-	}
-	return user, nil
+	return getBillingOwnerTx(tx.Statement.Context, tx.Clauses(clause.Locking{Strength: "UPDATE"}), userID)
 }
 
 func validateTopupAmount(user *UserRecord, amount float64) error {

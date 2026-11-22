@@ -1822,7 +1822,7 @@ func usageObservabilityAggregateBaseQuery(db *gorm.DB, query UsageObservabilityR
 	case "user", "client_key":
 		scope = scope.
 			Joins(`LEFT JOIN "api_key" ON "api_key"."api_key" = "usage"."api_key"`).
-			Joins(`LEFT JOIN "user" ON "user"."id" = COALESCE("billing_charge"."user_id", "api_key"."user_id")`)
+			Joins(`LEFT JOIN ` + billingOwnerProjectionSQL + ` ON "user"."id" = COALESCE("billing_charge"."user_id", "api_key"."user_id")`)
 	case "credential":
 		scope = scope.
 			Joins(`LEFT JOIN "auth" AS "auth_uuid" ON "auth_uuid"."deleted_at" IS NULL AND "auth_uuid"."uuid" = "usage"."auth_index"`).
@@ -2477,7 +2477,7 @@ func usageObservabilityRecordScope(scope *gorm.DB, query UsageObservabilityRecor
 	scope = scope.
 		Joins(`LEFT JOIN "billing_charge" ON "billing_charge"."usage_id" = "usage"."id"`).
 		Joins(`LEFT JOIN "api_key" ON "api_key"."api_key" = "usage"."api_key"`).
-		Joins(`LEFT JOIN "user" ON "user"."id" = COALESCE("billing_charge"."user_id", "api_key"."user_id")`).
+		Joins(`LEFT JOIN ` + billingOwnerProjectionSQL + ` ON "user"."id" = COALESCE("billing_charge"."user_id", "api_key"."user_id")`).
 		Joins(`LEFT JOIN "auth" AS "auth_uuid" ON "auth_uuid"."deleted_at" IS NULL AND "auth_uuid"."uuid" = "usage"."auth_index"`).
 		Joins(`LEFT JOIN "auth" AS "auth_by_index" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."deleted_at" IS NULL AND "auth_by_index"."index" = "usage"."auth_index"`).
 		Joins(`LEFT JOIN "auth" AS "auth_by_id" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."uuid" IS NULL AND "auth_by_id"."deleted_at" IS NULL AND "auth_by_id"."id" = "usage"."auth_index"`)

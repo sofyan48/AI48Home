@@ -621,6 +621,7 @@ func billingOverviewResponse(overview cluster.BillingOverview) gin.H {
 		"active_user_count":     overview.ActiveUserCount,
 		"daily_trend":           dailyTrend,
 		"top_users":             billingTopItemsResponse(overview.TopUsers),
+		"top_members":           billingTopItemsResponse(overview.TopMembers),
 		"top_models":            billingTopItemsResponse(overview.TopModels),
 		"top_providers":         billingTopItemsResponse(overview.TopProviders),
 	}

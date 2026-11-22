@@ -175,21 +175,21 @@ func (r *Repository) CreateOrganizationWithSetup(ctx context.Context, update Use
 	if errDB != nil {
 		return nil, errDB
 	}
-	// Organizations never authenticate; strip all credential material.
-	update.Password = nil
-	update.Email = nil
-	update.MFA = nil
-	update.Passkey = nil
-	pending := false
-	update.ApprovalPending = &pending
+	if update.Username == nil {
+		return nil, fmt.Errorf("username is required")
+	}
 	ctx = contextOrBackground(ctx)
 	var org *UserRecord
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		created, errCreate := createUserWithKindTx(ctx, tx, update, UserKindOrganization)
-		if errCreate != nil {
-			return errCreate
+		created := &UserRecord{Kind: UserKindOrganization}
+		if errApply := applyOrganizationUpdate(created, update); errApply != nil {
+			return errApply
 		}
-		updates := map[string]any{}
+		id, errAllocate := allocateBillingIdentityTx(ctx, tx, UserKindOrganization)
+		if errAllocate != nil {
+			return errAllocate
+		}
+		created.ID = id
 		if setup.ModelGroups != nil {
 			groups := normalizeModelGroupIDs(*setup.ModelGroups)
 			if errGroups := ensureAPIKeyGroupsNotDeleted(tx, nil, &groups); errGroups != nil {
@@ -199,15 +199,13 @@ func (r *Repository) CreateOrganizationWithSetup(ctx context.Context, update Use
 			if errJSON != nil {
 				return errJSON
 			}
-			updates["organization_model_groups"] = groupsJSON
+			created.OrganizationModelGroups = groupsJSON
 		}
 		if setup.AllowMemberKeys != nil {
-			updates["organization_member_keys_disabled"] = !*setup.AllowMemberKeys
+			created.OrganizationMemberKeysDisabled = !*setup.AllowMemberKeys
 		}
-		if len(updates) > 0 {
-			if errUpdate := tx.Model(&UserRecord{}).Where("id = ?", created.ID).Updates(updates).Error; errUpdate != nil {
-				return errUpdate
-			}
+		if errCreate := tx.Create(organizationFromUser(created)).Error; errCreate != nil {
+			return errCreate
 		}
 		if setup.OwnerUserID != nil {
 			owner := OrganizationRoleOwner
@@ -261,11 +259,15 @@ func (r *Repository) ListOrganizations(ctx context.Context) ([]UserRecord, error
 	if errDB != nil {
 		return nil, errDB
 	}
-	var records []UserRecord
-	if errFind := db.WithContext(contextOrBackground(ctx)).Where("kind = ?", UserKindOrganization).Order("id").Find(&records).Error; errFind != nil {
+	var records []OrganizationRecord
+	if errFind := db.WithContext(contextOrBackground(ctx)).Order("id").Find(&records).Error; errFind != nil {
 		return nil, errFind
 	}
-	return records, nil
+	out := make([]UserRecord, 0, len(records))
+	for index := range records {
+		out = append(out, *records[index].userRecord())
+	}
+	return out, nil
 }
 
 // GetOrganization returns an organization account by ID.
@@ -281,15 +283,15 @@ func getOrganizationTx(ctx context.Context, tx *gorm.DB, id uint) (*UserRecord, 
 	if id == 0 {
 		return nil, ErrOrganizationNotFound
 	}
-	record := &UserRecord{}
-	errFirst := tx.WithContext(contextOrBackground(ctx)).Where("id = ? AND kind = ?", id, UserKindOrganization).First(record).Error
+	record := &OrganizationRecord{}
+	errFirst := tx.WithContext(contextOrBackground(ctx)).Where("id = ?", id).First(record).Error
 	if errors.Is(errFirst, gorm.ErrRecordNotFound) {
 		return nil, ErrOrganizationNotFound
 	}
 	if errFirst != nil {
 		return nil, errFirst
 	}
-	return record, nil
+	return record.userRecord(), nil
 }
 
 // ListOrganizationMembers returns members of one organization ordered by ID.
@@ -328,8 +330,8 @@ func (r *Repository) ListUserOrganizations(ctx context.Context, userID uint) ([]
 	var memberships []OrganizationMembership
 	errFind := db.WithContext(contextOrBackground(ctx)).
 		Table("organization_member").
-		Select(`"organization_member".*, "user"."username" AS organization_name`).
-		Joins(`JOIN "user" ON "user"."id" = "organization_member"."org_user_id" AND "user"."deleted_at" IS NULL`).
+		Select(`"organization_member".*, "organization"."username" AS organization_name`).
+		Joins(`JOIN "organization" ON "organization"."id" = "organization_member"."org_user_id" AND "organization"."deleted_at" IS NULL`).
 		Where(`"organization_member"."member_user_id" = ?`, userID).
 		Order(`"organization_member"."org_user_id"`).
 		Scan(&memberships).Error
@@ -408,8 +410,7 @@ func addOrganizationMemberTx(ctx context.Context, tx *gorm.DB, orgID, memberID u
 			return errOrg
 		}
 		record.ResetAllowanceTimezone = org.Timezone
-		member := &UserRecord{}
-		errMember := tx.Where("id = ?", memberID).First(member).Error
+		member, errMember := getBillingOwnerTx(ctx, tx, memberID)
 		if errors.Is(errMember, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("%w: %d", ErrUserNotFound, memberID)
 		}
@@ -552,15 +553,14 @@ func (r *Repository) DeleteOrganization(ctx context.Context, orgID uint) error {
 				return errEvent
 			}
 		}
-		return tx.Delete(org).Error
+		return tx.Delete(organizationFromUser(org)).Error
 	})
 }
 
-// removeUserOrganizationLinksTx runs when any user account is deleted: personal
-// users lose memberships and the organization keys they created; organization
-// accounts lose their member rows (their own keys are removed by the caller).
+// removeUserOrganizationLinksTx removes a personal user's memberships and the
+// organization keys they created. Organization deletion has its own path.
 func removeUserOrganizationLinksTx(tx *gorm.DB, userID uint) error {
-	if errMembers := tx.Where("member_user_id = ? OR org_user_id = ?", userID, userID).Delete(&OrganizationMemberRecord{}).Error; errMembers != nil {
+	if errMembers := tx.Where("member_user_id = ?", userID).Delete(&OrganizationMemberRecord{}).Error; errMembers != nil {
 		return errMembers
 	}
 	return deleteOrganizationMemberKeysTx(tx, nil, userID)
@@ -586,7 +586,7 @@ func deleteOrganizationMemberKeysTx(tx *gorm.DB, orgID *uint, memberID uint) err
 
 func lockOrganizationOwnersTx(ctx context.Context, tx *gorm.DB, orgID uint) error {
 	// Serialize owner changes per organization through the organization row lock.
-	record := &UserRecord{}
+	record := &OrganizationRecord{}
 	return tx.WithContext(contextOrBackground(ctx)).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Select("id").
@@ -743,7 +743,7 @@ func (r *Repository) SetOrganizationModelGroups(ctx context.Context, orgID uint,
 		if errGroups := ensureAPIKeyGroupsNotDeleted(tx, nil, &groups); errGroups != nil {
 			return errGroups
 		}
-		if errUpdate := tx.Model(&UserRecord{}).Where("id = ?", orgID).Update("organization_model_groups", groupsJSON).Error; errUpdate != nil {
+		if errUpdate := tx.Model(&OrganizationRecord{}).Where("id = ?", orgID).Update("organization_model_groups", groupsJSON).Error; errUpdate != nil {
 			return errUpdate
 		}
 		if errMembers := reconcileOrganizationMemberScopesTx(tx, orgID, groups); errMembers != nil {
@@ -771,7 +771,7 @@ func (r *Repository) SetOrganizationMemberKeysAllowed(ctx context.Context, orgID
 	if _, errOrg := getOrganizationTx(ctx, db, orgID); errOrg != nil {
 		return nil, errOrg
 	}
-	if errUpdate := db.WithContext(ctx).Model(&UserRecord{}).Where("id = ?", orgID).Update("organization_member_keys_disabled", !allowed).Error; errUpdate != nil {
+	if errUpdate := db.WithContext(ctx).Model(&OrganizationRecord{}).Where("id = ?", orgID).Update("organization_member_keys_disabled", !allowed).Error; errUpdate != nil {
 		return nil, errUpdate
 	}
 	return getOrganizationTx(ctx, db, orgID)

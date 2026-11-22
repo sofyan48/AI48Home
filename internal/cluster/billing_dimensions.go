@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -510,14 +511,16 @@ func billingEffortMultipliersFromJSONB(raw JSONB) map[string]float64 {
 	return multipliers
 }
 
-// billingUserMultiplierTx returns the user's billing multiplier, defaulting to 1.
+// billingUserMultiplierTx returns the payer's billing multiplier, defaulting to 1.
 func billingUserMultiplierTx(ctx context.Context, tx *gorm.DB, userID uint) (float64, error) {
-	user := &UserRecord{}
-	result := tx.WithContext(contextOrBackground(ctx)).Select("id", "billing_multiplier").Where("id = ?", userID).Limit(1).Find(user)
-	if result.Error != nil {
-		return 0, result.Error
+	user, errOwner := getBillingOwnerTx(ctx, tx, userID)
+	if errors.Is(errOwner, gorm.ErrRecordNotFound) || errors.Is(errOwner, ErrOrganizationNotFound) {
+		return 1, nil
 	}
-	if result.RowsAffected == 0 || user.BillingMultiplier == nil {
+	if errOwner != nil {
+		return 0, errOwner
+	}
+	if user.BillingMultiplier == nil {
 		return 1, nil
 	}
 	return *user.BillingMultiplier, nil

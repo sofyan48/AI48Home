@@ -25,6 +25,8 @@ services:
       timeout: 5s
       retries: 20
     networks: [ai48-dev]
+    ports:
+      - "5432:5432"
 
   ai48home:
     build:

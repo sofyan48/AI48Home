@@ -67,8 +67,9 @@ func (r *Repository) SetUserResetAllowance(ctx context.Context, userID uint, mod
 	}
 	var user *UserRecord
 	errTx := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
-		user = &UserRecord{}
-		if errFirst := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(user, userID).Error; errFirst != nil {
+		var errFirst error
+		user, errFirst = getBillingOwnerTx(ctx, tx.Clauses(clause.Locking{Strength: "UPDATE"}), userID)
+		if errFirst != nil {
 			return errFirst
 		}
 		var renewsAt *time.Time
@@ -77,11 +78,12 @@ func (r *Repository) SetUserResetAllowance(ctx context.Context, userID uint, mod
 			renewsAt = &next
 		}
 		updates := map[string]any{"reset_allowance_mode": mode, "reset_allowance_amount": amount, "reset_allowance_available": amount, "reset_allowance_expires_at": expiresAt, "reset_allowance_renews_at": renewsAt}
-		if errUpdate := tx.Model(user).Updates(updates).Error; errUpdate != nil {
+		if errUpdate := tx.Model(&UserRecord{}).Table(billingOwnerTable(user)).Where("id = ?", userID).Updates(updates).Error; errUpdate != nil {
 			return errUpdate
 		}
-		user = &UserRecord{}
-		return tx.First(user, userID).Error
+		var errReload error
+		user, errReload = getBillingOwnerTx(ctx, tx, userID)
+		return errReload
 	})
 	return user, errTx
 }
@@ -111,8 +113,8 @@ func (r *Repository) ConsumeUserResetAllowance(ctx context.Context, userID uint,
 	now = now.UTC()
 	var status UserPeriodLimitsStatus
 	errTx := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
-		user := &UserRecord{}
-		if errFirst := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(user, userID).Error; errFirst != nil {
+		user, errFirst := getBillingOwnerTx(ctx, tx.Clauses(clause.Locking{Strength: "UPDATE"}), userID)
+		if errFirst != nil {
 			return errFirst
 		}
 		windows := []string{}
@@ -132,21 +134,22 @@ func (r *Repository) ConsumeUserResetAllowance(ctx context.Context, userID uint,
 			return ErrResetAllowanceUnavailable
 		}
 		if allowance.Mode == ResetAllowanceMonthly && (user.ResetAllowanceRenewsAt == nil || !now.Before(*user.ResetAllowanceRenewsAt)) {
-			if errRenew := tx.Model(user).Updates(map[string]any{"reset_allowance_available": allowance.Amount, "reset_allowance_renews_at": allowance.RenewsAt}).Error; errRenew != nil {
+			if errRenew := tx.Model(&UserRecord{}).Table(billingOwnerTable(user)).Where("id = ?", userID).Updates(map[string]any{"reset_allowance_available": allowance.Amount, "reset_allowance_renews_at": allowance.RenewsAt}).Error; errRenew != nil {
 				return errRenew
 			}
 		}
 		updates := userPeriodResetUpdates(user, windows, PeriodResetModeCounter, now)
 		updates["reset_allowance_available"] = gorm.Expr("reset_allowance_available - 1")
-		result := tx.Model(&UserRecord{}).Where("id = ? AND reset_allowance_available > 0", userID).Updates(updates)
+		result := tx.Model(&UserRecord{}).Table(billingOwnerTable(user)).Where("id = ? AND reset_allowance_available > 0", userID).Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return ErrResetAllowanceUnavailable
 		}
-		user = &UserRecord{}
-		if errReload := tx.First(user, userID).Error; errReload != nil {
+		var errReload error
+		user, errReload = getBillingOwnerTx(ctx, tx, userID)
+		if errReload != nil {
 			return errReload
 		}
 		var errStatus error

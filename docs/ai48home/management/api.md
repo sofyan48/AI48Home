@@ -1781,6 +1781,7 @@ Response fields:
 | `active_user_count` | integer | Number of users with charges in the range. |
 | `daily_trend[]` | array | Daily charge amount and request count grouped in `range.timezone`. |
 | `top_users[]` | array | Top users with `id`, `label`, `amount`, and `request_count`. |
+| `top_members[]` | array | Top organization members by `actor_user_id`, same item shape. Populated only when `user_id` is set; otherwise empty. |
 | `top_models[]` | array | Top models with `id`, `label`, `amount`, and `request_count`. |
 | `top_providers[]` | array | Top providers with `id`, `label`, `amount`, and `request_count`. |
 

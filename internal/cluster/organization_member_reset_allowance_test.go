@@ -175,7 +175,7 @@ func TestOrganizationMemberResetAllowanceRenewalAndFailures(t *testing.T) {
 	addOrganizationTestMember(t, repo, org.ID, user.ID, OrganizationRoleMember)
 	now := time.Date(2026, 1, 31, 15, 59, 0, 0, time.UTC)
 	timezone := "Asia/Shanghai"
-	if _, errUpdate := repo.UpdateUser(ctx, org.ID, UserUpdate{Timezone: &timezone}); errUpdate != nil {
+	if _, errUpdate := repo.UpdateOrganization(ctx, org.ID, UserUpdate{Timezone: &timezone}); errUpdate != nil {
 		t.Fatal(errUpdate)
 	}
 	for _, test := range []struct {

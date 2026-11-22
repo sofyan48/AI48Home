@@ -1700,6 +1700,7 @@ Query 参数：
 | `active_user_count` | integer | 范围内有扣费记录的用户数量。 |
 | `daily_trend[]` | array | 按 `range.timezone` 分组的每日扣费金额和请求数量。 |
 | `top_users[]` | array | 用户排行，字段为 `id`、`label`、`amount`、`request_count`。 |
+| `top_members[]` | array | 按 `actor_user_id` 的组织成员排行，字段同上。仅在设置 `user_id` 时填充，否则为空数组。 |
 | `top_models[]` | array | 模型排行，字段为 `id`、`label`、`amount`、`request_count`。 |
 | `top_providers[]` | array | Provider 排行，字段为 `id`、`label`、`amount`、`request_count`。 |
 

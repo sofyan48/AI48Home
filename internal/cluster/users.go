@@ -25,7 +25,7 @@ func IsUserConflictError(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "idx_user_username_active_unique") {
+	if strings.Contains(message, "idx_user_username_active_unique") || strings.Contains(message, "idx_organization_username_active_unique") {
 		return true
 	}
 	if strings.Contains(message, "unique constraint") && strings.Contains(message, "user") && strings.Contains(message, "username") {
@@ -151,7 +151,13 @@ func (r *Repository) createUserWithKind(ctx context.Context, update UserUpdate, 
 	if errDB != nil {
 		return nil, errDB
 	}
-	return createUserWithKindTx(ctx, db, update, kind)
+	var record *UserRecord
+	errTransaction := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		created, errCreate := createUserWithKindTx(ctx, tx, update, kind)
+		record = created
+		return errCreate
+	})
+	return record, errTransaction
 }
 
 func createUserWithKindTx(ctx context.Context, db *gorm.DB, update UserUpdate, kind string) (*UserRecord, error) {
@@ -196,6 +202,11 @@ func createUserWithKindTx(ctx context.Context, db *gorm.DB, update UserUpdate, k
 	if update.Passkey != nil {
 		record.Passkey = cloneJSONB(*update.Passkey)
 	}
+	identityID, errIdentity := allocateBillingIdentityTx(ctx, db, UserKindPersonal)
+	if errIdentity != nil {
+		return nil, errIdentity
+	}
+	record.ID = identityID
 	if errCreate := db.WithContext(contextOrBackground(ctx)).Create(record).Error; errCreate != nil {
 		return nil, errCreate
 	}
@@ -445,8 +456,7 @@ func ensureUserExists(ctx context.Context, tx *gorm.DB, id uint) error {
 	if id == 0 {
 		return nil
 	}
-	record := UserRecord{}
-	errFirst := tx.WithContext(contextOrBackground(ctx)).Where("id = ?", id).First(&record).Error
+	_, errFirst := getBillingOwnerTx(ctx, tx, id)
 	if errors.Is(errFirst, gorm.ErrRecordNotFound) {
 		return fmt.Errorf("%w: %d", ErrUserNotFound, id)
 	}

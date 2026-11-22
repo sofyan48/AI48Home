@@ -21,7 +21,8 @@ import (
 // plus user.organization_member_keys_disabled.
 // v26 adds organization_member.model_groups and organization_member.max_api_keys.
 // v27 adds organization member reset allowances and usage epochs.
-const currentDatabaseVersion = 27
+// v28 separates organizations from users and reserves shared billing identities.
+const currentDatabaseVersion = 28
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -806,9 +807,16 @@ func databaseSnapshotUpstreamV18ModelRegistry() []databaseModel {
 // v23 columns are nullable, so v22 rows decode into the current record types.
 var databaseSnapshotV22Models = withUsageModel[UsageRecord](databaseSnapshotV21Models)
 
+// databaseSnapshotV27Models retains the shared user/organization row format.
+// UserRecord remains unchanged; v23 through v27 differ only by defaulted columns.
+var databaseSnapshotV27Models = append(append([]databaseModel(nil), databaseSnapshotV22Models...),
+	newDatabaseModel[OrganizationMemberRecord]("organization_member", []string{"id"}, true, true),
+)
+
 func currentDatabaseModels() []databaseModel {
-	return append(append([]databaseModel(nil), databaseSnapshotV22Models...),
-		newDatabaseModel[OrganizationMemberRecord]("organization_member", []string{"id"}, true, true),
+	return append(append([]databaseModel(nil), databaseSnapshotV27Models...),
+		newDatabaseModel[OrganizationRecord]("organization", []string{"id"}, false, true),
+		newDatabaseModel[BillingIdentityRecord]("billing_identity", []string{"id"}, true, true),
 	)
 }
 
@@ -865,9 +873,11 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV21Models, true
 	case 22:
 		return databaseSnapshotV22Models, true
-	case 23, 24, 25, 26, currentDatabaseVersion:
+	case 23, 24, 25, 26, 27:
 		// v24 repairs the live migration gate. v25 through v27 only add nullable or
 		// defaulted columns, so older organization rows decode into the current records.
+		return databaseSnapshotV27Models, true
+	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:
 		return nil, false

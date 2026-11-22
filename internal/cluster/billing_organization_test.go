@@ -34,7 +34,7 @@ func TestOrganizationUsageChargesBillOrganizationNotMember(t *testing.T) {
 			if errDB != nil {
 				t.Fatal(errDB)
 			}
-			if errUpdate := db.Model(&UserRecord{}).Where("id = ?", org.ID).Updates(map[string]any{
+			if errUpdate := db.Model(&OrganizationRecord{}).Where("id = ?", org.ID).Updates(map[string]any{
 				"billing_multiplier": 0.5, "credits_unlimited": tc.unlimited,
 			}).Error; errUpdate != nil {
 				t.Fatal(errUpdate)
@@ -97,7 +97,7 @@ func TestOrganizationUsageChargesBillOrganizationNotMember(t *testing.T) {
 				wantOrgCredits = 100
 			}
 			for userID, want := range map[uint]float64{org.ID: wantOrgCredits, owner.ID: 20, member.ID: 26, other.ID: 40} {
-				user, errUser := repo.GetUser(ctx, userID)
+				user, errUser := getBillingOwnerTx(ctx, db, userID)
 				if errUser != nil || user.Credits != want {
 					t.Fatalf("account %d credits=%+v error=%v, want %v", userID, user, errUser, want)
 				}
@@ -156,8 +156,8 @@ func TestOrganizationUsageChargesAfterMemberLeaves(t *testing.T) {
 		}
 	}
 	for userID, want := range map[uint]float64{org.ID: 98, owner.ID: 20, member.ID: 30} {
-		user := &UserRecord{}
-		if errUser := db.WithContext(ctx).Where("id = ?", userID).First(user).Error; errUser != nil || user.Credits != want {
+		user, errUser := getBillingOwnerTx(ctx, db, userID)
+		if errUser != nil || user.Credits != want {
 			t.Fatalf("account %d credits=%+v error=%v, want %v", userID, user, errUser, want)
 		}
 	}

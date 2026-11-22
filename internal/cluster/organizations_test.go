@@ -260,7 +260,7 @@ func TestOrganizationModelGroupsMigrationRepairsMissingColumn(t *testing.T) {
 		t.Fatal(errDB)
 	}
 	// Reproduce a database migrated by the initial organization release.
-	if errDrop := db.Migrator().DropColumn(&UserRecord{}, "organization_model_groups"); errDrop != nil {
+	if errDrop := db.Migrator().DropColumn(&OrganizationRecord{}, "organization_model_groups"); errDrop != nil {
 		t.Fatal(errDrop)
 	}
 	if currentDatabaseVersion <= 23 {
@@ -269,7 +269,7 @@ func TestOrganizationModelGroupsMigrationRepairsMissingColumn(t *testing.T) {
 	if errMigrate := AutoMigrate(db); errMigrate != nil {
 		t.Fatal(errMigrate)
 	}
-	if !db.Migrator().HasColumn(&UserRecord{}, "organization_model_groups") {
+	if !db.Migrator().HasColumn(&OrganizationRecord{}, "organization_model_groups") {
 		t.Fatal("migration did not restore organization_model_groups")
 	}
 	name := "personal-after-migration"
@@ -343,7 +343,7 @@ func TestOrganizationMemberLimitCannotExceedOrganizationLimit(t *testing.T) {
 
 	member := createPeriodLimitUser(t, repo, ctx, "member", 0)
 	org := createOrganizationTestOrg(t, repo, "acme", 100)
-	if _, errOrg := repo.UpdateUser(ctx, org.ID, UserUpdate{Limit1dCredits: OptionalFloatUpdate{Set: true, Value: 20}}); errOrg != nil {
+	if _, errOrg := repo.UpdateOrganization(ctx, org.ID, UserUpdate{Limit1dCredits: OptionalFloatUpdate{Set: true, Value: 20}}); errOrg != nil {
 		t.Fatalf("set organization limit error = %v", errOrg)
 	}
 	_, errAdd := repo.AddOrganizationMember(ctx, org.ID, member.ID, OrganizationMemberUpdate{Limit1dCredits: OptionalFloatUpdate{Set: true, Value: 25}})
@@ -506,7 +506,7 @@ func TestDeletingLastOwnerAccountIsBlocked(t *testing.T) {
 	}
 }
 
-func TestDeleteUserOnOrganizationDeletesItsKeys(t *testing.T) {
+func TestDeleteOrganizationDeletesItsKeys(t *testing.T) {
 	repo, ctx, closeRepo := newPeriodLimitTestRepo(t)
 	defer closeRepo()
 
@@ -514,8 +514,8 @@ func TestDeleteUserOnOrganizationDeletesItsKeys(t *testing.T) {
 	org := createOrganizationTestOrg(t, repo, "acme", 10)
 	addOrganizationTestMember(t, repo, org.ID, owner.ID, OrganizationRoleOwner)
 	key := createOrganizationTestKey(t, repo, org.ID, owner.ID, "sk-org-cascade")
-	if errDelete := repo.DeleteUser(ctx, org.ID); errDelete != nil {
-		t.Fatalf("DeleteUser(organization) error = %v", errDelete)
+	if errDelete := repo.DeleteOrganization(ctx, org.ID); errDelete != nil {
+		t.Fatalf("DeleteOrganization() error = %v", errDelete)
 	}
 	assertOrganizationKeyExists(t, repo, key.APIKey, false)
 	if memberships, _ := repo.ListUserOrganizations(ctx, owner.ID); len(memberships) != 0 {

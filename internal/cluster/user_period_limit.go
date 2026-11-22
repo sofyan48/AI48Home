@@ -724,7 +724,7 @@ func (r *Repository) BuildUserPeriodLimitsStatus(ctx context.Context, userID uin
 	if errDB != nil {
 		return UserPeriodLimitsStatus{}, errDB
 	}
-	user, errUser := r.GetUser(ctx, userID)
+	user, errUser := getBillingOwnerTx(ctx, db, userID)
 	if errUser != nil {
 		return UserPeriodLimitsStatus{}, errUser
 	}
@@ -798,8 +798,8 @@ func (r *Repository) ResetUserPeriodLimits(ctx context.Context, userID uint, win
 
 	var result UserPeriodLimitResetResult
 	errTx := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
-		user := &UserRecord{}
-		if errFirst := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", userID).First(user).Error; errFirst != nil {
+		user, errFirst := getBillingOwnerTx(ctx, tx.Clauses(clause.Locking{Strength: "UPDATE"}), userID)
+		if errFirst != nil {
 			return errFirst
 		}
 		defaultUserPeriodLimitFields(user)
@@ -811,14 +811,15 @@ func (r *Repository) ResetUserPeriodLimits(ctx context.Context, userID uint, win
 
 		updates := userPeriodResetUpdates(user, target, mode, now)
 		if len(updates) > 0 {
-			if errUpdate := tx.Model(&UserRecord{}).Where("id = ?", userID).Updates(updates).Error; errUpdate != nil {
+			if errUpdate := tx.Model(&UserRecord{}).Table(billingOwnerTable(user)).Where("id = ?", userID).Updates(updates).Error; errUpdate != nil {
 				return errUpdate
 			}
 		}
-		// Reload into a zero-value record so database NULLs clear pointer fields
+		// Reload a fresh owner so database NULLs clear pointer fields
 		// retained in the locked pre-update snapshot.
-		user = &UserRecord{}
-		if errReload := tx.Where("id = ?", userID).First(user).Error; errReload != nil {
+		var errReload error
+		user, errReload = getBillingOwnerTx(ctx, tx, userID)
+		if errReload != nil {
 			return errReload
 		}
 		status, errStatus := buildUserPeriodLimitsStatusDB(ctx, tx, user, now)
@@ -878,14 +879,11 @@ func ensureAPIKeyUserBillingAllowed(ctx context.Context, db *gorm.DB, record *AP
 		return nil
 	}
 
-	user := UserRecord{}
-	errFirst := db.WithContext(contextOrBackground(ctx)).
-		Where("id = ?", *userID).
-		First(&user).Error
+	user, errFirst := getBillingOwnerTx(ctx, db, *userID)
 	if errFirst != nil {
 		return errFirst
 	}
-	defaultUserPeriodLimitFields(&user)
+	defaultUserPeriodLimitFields(user)
 	if !user.CreditsUnlimited && user.Credits <= 0 {
 		return fmt.Errorf("%s: %s", homeerrors.TypeUserCreditsInsufficient, homeerrors.MessageUserCreditsInsufficient)
 	}
@@ -894,12 +892,12 @@ func ensureAPIKeyUserBillingAllowed(ctx context.Context, db *gorm.DB, record *AP
 			return errMember
 		}
 	}
-	if !userPeriodLimitsEnabled(&user) {
+	if !userPeriodLimitsEnabled(user) {
 		return nil
 	}
 
 	now := time.Now().UTC()
-	evals, errEval := evaluateUserPeriodWindows(ctx, db, &user, now)
+	evals, errEval := evaluateUserPeriodWindows(ctx, db, user, now)
 	if errEval != nil {
 		return errEval
 	}
@@ -932,17 +930,13 @@ func openUserFirstUseWindowsOnChargeTx(ctx context.Context, tx *gorm.DB, userID 
 	}
 	chargeTime = chargeTime.UTC()
 
-	user := UserRecord{}
-	errFirst := tx.WithContext(contextOrBackground(ctx)).
-		Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("id = ?", userID).
-		First(&user).Error
+	user, errFirst := getBillingOwnerTx(ctx, tx.Clauses(clause.Locking{Strength: "UPDATE"}), userID)
 	if errFirst != nil {
 		return errFirst
 	}
-	defaultUserPeriodLimitFields(&user)
+	defaultUserPeriodLimitFields(user)
 
-	evals, errEval := evaluateUserPeriodWindows(ctx, tx, &user, chargeTime)
+	evals, errEval := evaluateUserPeriodWindows(ctx, tx, user, chargeTime)
 	if errEval != nil {
 		return errEval
 	}
@@ -962,6 +956,7 @@ func openUserFirstUseWindowsOnChargeTx(ctx context.Context, tx *gorm.DB, userID 
 	}
 	return tx.WithContext(contextOrBackground(ctx)).
 		Model(&UserRecord{}).
+		Table(billingOwnerTable(user)).
 		Where("id = ?", userID).
 		Updates(updates).Error
 }
