@@ -14,6 +14,25 @@ The browser user workspace is at `/app`, with sign-in at `/app/login`. These UI 
 
 Home examples usually use port `8327`. An explicit `-addr` takes precedence; otherwise Home uses `node.port` from `cluster.yaml`. The v8 runtime config `server.port` is distributed to CPA nodes and does not configure the Home listener.
 
+## Organization Member Reset Allowance
+
+`GET /user/capabilities` advertises `capabilities.organization_member_reset_allowance: true`.
+
+| Method | Full path | Permission |
+| --- | --- | --- |
+| `PUT` | `/user/organizations/:org_id/members/:user_id/reset-allowance` | Organization owner only. |
+| `POST` | `/user/organizations/:org_id/members/:user_id/period-limits/reset` | Organization owner or the target member themself. |
+
+Both require a normal user session and current membership. Non-members see 404 (including for existing organizations); members attempting another member's reset or any policy configuration get 403 `organization_owner_required`. Owners can configure/reset any current member. `:user_id` is the personal user ID, not the membership row ID.
+
+Configure body: `{"mode":"one_time","amount":3,"expires_at":"2027-01-01T00:00:00Z"}` or `{"mode":"monthly","amount":2}`. `amount` is a required non-negative integer (zero disables consumption). One-time expiry is optional/null and consumption at or after expiry fails. Monthly policies reject non-null expiry; they refill to `amount`, without accumulation, at the next calendar month in the **organization's timezone**, not the personal user's. Reconfiguration replaces the policy and refills it immediately. Reads show effective lazy renewal; consumption persists renewal.
+
+Reset accepts **no body and no query parameters** (even `{}` is invalid). It consumes one allowance and atomically clears first-use starts/advances usage epochs for all and only enabled member windows, including zero-credit limits. Personal reset allowances/windows, other members/organizations, organization-wide windows, balances and historical charges remain unchanged.
+
+Both routes return HTTP 200 `{"member": <user member response>}`. The member includes `user_id`, `role`, existing limit/access fields and `created_at`, plus `reset_allowance: {mode, amount, available, expires_at, renews_at}` and `spend_windows` (four entries with `id`, `limit`, `used`, `remaining`, `mode`, `active`, `reset_at`). Dates are nullable RFC3339 timestamps. Unconfigured allowance: empty mode, zero amounts, null dates. Existing member responses also include `reset_allowance`. `GET /user/organizations/:org_id` now includes `organization.member` with the caller's member response/allowance (existing `organization.spend_limits` remains unchanged), allowing ordinary members to read their policy without owner-only member-list access.
+
+Errors: 400 invalid body/policy (`invalid_reset_allowance_mode`, `invalid_reset_allowance_amount`, `invalid_reset_allowance_expiry` for policy validation); 404 missing organization/member; 409 `reset_allowance_no_enabled_windows` or `reset_allowance_unavailable` (unconfigured, exhausted or expired). Failures do not spend an allowance. Management equivalents are documented in the [Management API](../management/api.md#organization-member-reset-allowance).
+
 ## Runtime Model
 
 User records, optional email state, one-time security tokens, mail jobs, API keys, TOTP settings, and passkey entries are stored in the database-backed cluster repository. The `/user/*` route group is registered only when Home is running with the database-backed runtime route set.

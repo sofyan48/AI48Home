@@ -162,6 +162,8 @@ func Register(group *gin.RouterGroup, handler *Handler) {
 	group.PATCH("/organizations/:org_id", handler.UpdateMyOrganizationSettings)
 	group.GET("/organizations/:org_id/members", handler.ListMyOrganizationMembers)
 	group.POST("/organizations/:org_id/members", handler.AddMyOrganizationMember)
+	group.PUT("/organizations/:org_id/members/:user_id/reset-allowance", handler.SetMyOrganizationMemberResetAllowance)
+	group.POST("/organizations/:org_id/members/:user_id/period-limits/reset", handler.ResetMyOrganizationMemberPeriodLimits)
 	group.PATCH("/organizations/:org_id/members/:user_id", handler.UpdateMyOrganizationMember)
 	group.DELETE("/organizations/:org_id/members/:user_id", handler.RemoveMyOrganizationMember)
 	group.GET("/organizations/:org_id/api-keys", handler.ListMyOrganizationAPIKeys)

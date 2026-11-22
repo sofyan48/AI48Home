@@ -176,6 +176,7 @@ func (h *Handler) GetMyOrganization(c *gin.Context) {
 		"spend_limits":      windows,
 		"allow_member_keys": !oc.org.OrganizationMemberKeysDisabled,
 		"can_create_keys":   oc.canCreateOwnKeys(),
+		"member":            organizationMemberUserResponse(oc.member),
 	}
 	if oc.isOwner() {
 		item["credits"] = oc.org.Credits

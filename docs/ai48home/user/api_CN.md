@@ -14,6 +14,23 @@ http://<host>:<port>/user
 
 Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 使用 `cluster.yaml` 中的 `node.port`。v8 runtime config 的 `server.port` 仅下发给 CPA 节点，不参与 Home 监听端口配置。
 
+## 组织成员重置额度
+
+`GET /user/capabilities` 新增 `organization_member_reset_allowance: true`。
+
+- `PUT /user/organizations/:org_id/members/:user_id/reset-allowance`：仅组织 owner 可配置成员策略。
+- `POST /user/organizations/:org_id/members/:user_id/period-limits/reset`：owner 或目标成员本人可消耗一次额度。
+
+需要普通用户会话及当前组织成员身份。非成员统一返回 404；普通成员配置策略或重置其他成员返回 403 `organization_owner_required`。`:user_id` 是个人用户 ID，不是成员关系记录 ID。
+
+配置请求：`{"mode":"one_time","amount":3,"expires_at":"2027-01-01T00:00:00Z"}` 或 `{"mode":"monthly","amount":2}`。amount 为必填非负整数，0 禁止消耗；one_time 可省略/null 过期时间，到期时刻（含）不可消耗；monthly 禁止非 null 过期时间。重新配置立即补满可用次数。monthly 按**组织时区**而非个人时区的下月月初补满，不累积；读取计算有效额度，消耗时持久化续期。
+
+重置必须**无请求体、无 query 参数**（包括 `{}` 均无效）。事务内扣减一次，清空所有已启用成员窗口的 first-use 起点并推进 usage epoch；0 限额也算启用。禁用窗口、个人额度和窗口、其他成员关系、组织总窗口、余额和历史账单均保持不变。
+
+成功返回 HTTP 200 `{"member": <user member response>}`，保留 `user_id`、`role`、limit/access 字段、`created_at`，新增 `reset_allowance: {mode, amount, available, expires_at, renews_at}` 与 `spend_windows`（四个窗口，字段为 `id`, `limit`, `used`, `remaining`, `mode`, `active`, `reset_at`）。日期为可空 RFC3339。未配置时 mode 为空、次数为 0、日期为 null。其他成员响应同样包含 reset_allowance。`GET /user/organizations/:org_id` 新增 `organization.member`，提供调用者自身成员响应及额度；原有 `organization.spend_limits` 不变，普通成员无需访问 owner-only 成员列表即可读取额度。
+
+错误：400 无效请求/策略（策略 code 为 `invalid_reset_allowance_mode`、`invalid_reset_allowance_amount`、`invalid_reset_allowance_expiry`）；404 组织/成员不存在；409 `reset_allowance_no_enabled_windows` 或 `reset_allowance_unavailable`（未配置、耗尽、过期）。失败不扣额度。管理接口参见 [Management API](../management/api_CN.md#组织成员重置额度)。
+
 ## Runtime 模型
 
 用户记录、可选邮箱状态、一次性安全 token、邮件任务、API key、TOTP 配置和 passkey entries 存储在 database-backed cluster repository 中。`/user/*` route group 只会在 Home 使用 database-backed runtime route set 时注册。

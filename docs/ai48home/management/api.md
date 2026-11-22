@@ -1359,6 +1359,23 @@ Common errors:
 
 ## Organizations
 
+### Organization member reset allowance
+
+Capability: `capabilities.organization_member_reset_allowance: true` in both Management and User manifests. These routes require Management API authentication:
+
+| Method | Full path | Action |
+| --- | --- | --- |
+| `PUT` | `/v8/management/organizations/:id/members/:user_id/reset-allowance` | Replace this membership's allowance policy. |
+| `POST` | `/v8/management/organizations/:id/members/:user_id/period-limits/reset` | Consume one allowance and reset all enabled member windows. |
+
+`:user_id` is the personal user ID, not the membership row ID. Configure body: `{"mode":"one_time","amount":3,"expires_at":"2027-01-01T00:00:00Z"}` or `{"mode":"monthly","amount":2}`. `amount` is a required non-negative integer; zero disables consumption. `expires_at` is optional/null for `one_time` and must be absent/null for `monthly`. Reconfiguration replaces the policy and immediately refills `available` to `amount`. Monthly allowances refill (without accumulation) at the next calendar month in the **organization timezone**, lazily persisted on consumption. Expiry is exclusive: consumption at `expires_at` fails.
+
+Both operations return HTTP 200 with `{"member": <management member response>}`. The member includes `reset_allowance: {mode, amount, available, expires_at, renews_at}` and `spend_windows` (the existing four-window member spend shape: `id`, `limit`, `used`, `remaining`, `mode`, `active`, `reset_at`). Nullable timestamps use RFC3339; an unconfigured allowance has empty mode and zero amounts. Member responses elsewhere also include `reset_allowance`, with effective read-only lazy renewal.
+
+Reset requires an **empty body and no query parameters**: selectors, reset modes, and even `{}` are rejected (400). One unit resets all and only enabled member windows (including zero-credit windows), clears their first-use starts, and advances their usage epochs in one guarded transaction. Administrators also consume the member allowance; there is no bypass. Disabled windows, personal allowances/windows, other memberships, organization aggregate windows, balances and historical billing charges are untouched.
+
+Errors: 400 for invalid bodies/policies (policy validation uses `field_errors` codes `invalid_reset_allowance_mode`, `invalid_reset_allowance_amount`, `invalid_reset_allowance_expiry`); 404 for missing organization/member; 409 `reset_allowance_no_enabled_windows` when no member windows are enabled; 409 `reset_allowance_unavailable` when unconfigured, exhausted or expired. Failed reset does not decrement the allowance.
+
 Organizations are shared billing accounts for teams. An organization is stored as a `user` row with `kind: "organization"`; it owns credits, period limits, `billing_multiplier` and model groups exactly like a user, but it can never log in (password, TOTP, passkey and bearer-token authentication are all rejected). Only administrators create organizations. `GET /users` lists personal users only; organizations are listed by `GET /organizations`.
 
 Members are personal users linked with a role:

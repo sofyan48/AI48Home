@@ -1,5 +1,20 @@
 # AI48Home Cluster Management API 文档
 
+## 组织成员重置额度
+
+Management 和 User capabilities 均新增 `organization_member_reset_allowance: true`。以下接口需要 Management API 认证：
+
+- `PUT /v8/management/organizations/:id/members/:user_id/reset-allowance`：替换该成员关系的重置策略。
+- `POST /v8/management/organizations/:id/members/:user_id/period-limits/reset`：消耗一次额度，重置所有已启用的成员窗口。
+
+`:user_id` 是个人用户 ID，不是成员关系记录 ID。配置请求为 `{"mode":"one_time","amount":3,"expires_at":"2027-01-01T00:00:00Z"}` 或 `{"mode":"monthly","amount":2}`。`amount` 必须为非负整数，0 禁止消耗。`one_time` 的过期时间可省略或为 null，到期时刻（含）不可使用；`monthly` 禁止非 null 的过期时间。重新配置立即将可用次数补满为 `amount`。每月额度按**组织时区**的下月月初重新补满，不累积；读取计算有效额度，消耗时持久化续期。
+
+两个接口均返回 HTTP 200 `{"member": <management member response>}`，成员中包含 `reset_allowance: {mode, amount, available, expires_at, renews_at}` 和 `spend_windows`（四个成员窗口，字段为 `id`, `limit`, `used`, `remaining`, `mode`, `active`, `reset_at`）。时间为可空 RFC3339；未配置策略的 mode 为空、次数为 0、时间为 null。其他成员响应同样包含有效的 `reset_allowance`。
+
+重置请求必须**无请求体、无 query 参数**，`{}`、窗口选择或模式参数均返回 400。管理员也必须消耗该成员额度，无绕过。事务内受保护地扣减一次，清空所有已启用窗口（包括 0 限额）的 first-use 起点并更新 usage epoch；禁用窗口、个人额度及窗口、其他成员关系、组织总窗口、余额和历史账单均不改变。
+
+错误：400 请求或策略无效（策略 `field_errors` code 为 `invalid_reset_allowance_mode`、`invalid_reset_allowance_amount`、`invalid_reset_allowance_expiry`）；404 组织或成员不存在；409 `reset_allowance_no_enabled_windows` 无启用窗口；409 `reset_allowance_unavailable` 未配置、耗尽或过期。失败不会扣减额度。
+
 本文档描述 AI48Home 当前 DB-backed Management API。Home 启动时会初始化 runtime database，并注册 Home runtime 使用的 database-backed management route set。
 
 基础路径：

@@ -66,10 +66,20 @@ type OrganizationMemberRecord struct {
 	Limit30dCredits *float64 `gorm:"column:limit_30d_credits"`
 	WindowMode30d   string   `gorm:"column:window_mode_30d;type:varchar(16);not null;default:sliding"`
 	// first_use window state, opened by the member's first billable charge.
-	PeriodWindowStart5h  *time.Time `gorm:"column:period_window_start_5h"`
-	PeriodWindowStart1d  *time.Time `gorm:"column:period_window_start_1d"`
-	PeriodWindowStart7d  *time.Time `gorm:"column:period_window_start_7d"`
-	PeriodWindowStart30d *time.Time `gorm:"column:period_window_start_30d"`
+	PeriodWindowStart5h     *time.Time `gorm:"column:period_window_start_5h"`
+	PeriodWindowStart1d     *time.Time `gorm:"column:period_window_start_1d"`
+	PeriodWindowStart7d     *time.Time `gorm:"column:period_window_start_7d"`
+	PeriodWindowStart30d    *time.Time `gorm:"column:period_window_start_30d"`
+	UsageEpoch5h            *time.Time `gorm:"column:usage_epoch_5h"`
+	UsageEpoch1d            *time.Time `gorm:"column:usage_epoch_1d"`
+	UsageEpoch7d            *time.Time `gorm:"column:usage_epoch_7d"`
+	UsageEpoch30d           *time.Time `gorm:"column:usage_epoch_30d"`
+	ResetAllowanceMode      string     `gorm:"column:reset_allowance_mode;not null;default:''"`
+	ResetAllowanceAmount    int64      `gorm:"column:reset_allowance_amount;not null;default:0"`
+	ResetAllowanceAvailable int64      `gorm:"column:reset_allowance_available;not null;default:0"`
+	ResetAllowanceExpiresAt *time.Time `gorm:"column:reset_allowance_expires_at"`
+	ResetAllowanceRenewsAt  *time.Time `gorm:"column:reset_allowance_renews_at"`
+	ResetAllowanceTimezone  string     `gorm:"-"`
 	// ModelGroups narrows this member's organization keys to a subset of the
 	// organization model groups; empty inherits the organization scope.
 	ModelGroups JSONB `gorm:"column:model_groups"`
@@ -288,7 +298,8 @@ func (r *Repository) ListOrganizationMembers(ctx context.Context, orgID uint) ([
 	if errDB != nil {
 		return nil, errDB
 	}
-	if _, errOrg := getOrganizationTx(ctx, db, orgID); errOrg != nil {
+	org, errOrg := getOrganizationTx(ctx, db, orgID)
+	if errOrg != nil {
 		return nil, errOrg
 	}
 	var members []OrganizationMember
@@ -301,6 +312,9 @@ func (r *Repository) ListOrganizationMembers(ctx context.Context, orgID uint) ([
 		Scan(&members).Error
 	if errFind != nil {
 		return nil, errFind
+	}
+	for index := range members {
+		members[index].ResetAllowanceTimezone = org.Timezone
 	}
 	return members, nil
 }
@@ -347,6 +361,11 @@ func getOrganizationMemberTx(ctx context.Context, tx *gorm.DB, orgID, memberID u
 	if errFirst != nil {
 		return nil, errFirst
 	}
+	org, errOrg := getOrganizationTx(ctx, tx, orgID)
+	if errOrg != nil {
+		return nil, errOrg
+	}
+	record.ResetAllowanceTimezone = org.Timezone
 	return record, nil
 }
 
@@ -388,6 +407,7 @@ func addOrganizationMemberTx(ctx context.Context, tx *gorm.DB, orgID, memberID u
 		if errOrg != nil {
 			return errOrg
 		}
+		record.ResetAllowanceTimezone = org.Timezone
 		member := &UserRecord{}
 		errMember := tx.Where("id = ?", memberID).First(member).Error
 		if errors.Is(errMember, gorm.ErrRecordNotFound) {

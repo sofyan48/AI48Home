@@ -2677,9 +2677,7 @@ func usageObservabilityApplyRecordFilters(scope *gorm.DB, query UsageObservabili
 	if userID := normalizeOptionalUint(query.UserID); userID != nil {
 		scope = scope.Where(`COALESCE("billing_charge"."user_id", "api_key"."user_id") = ?`, *userID)
 	}
-	if actorID := normalizeOptionalUint(query.ActorUserID); actorID != nil {
-		scope = scope.Where(`"billing_charge"."actor_user_id" = ?`, *actorID)
-	}
+	scope = usageObservabilityActorScope(scope, query.ActorUserID)
 	if clientKey := strings.TrimSpace(query.ClientKey); clientKey != "" {
 		matcher := "%" + clientKey + "%"
 		scope = scope.Where(`"api_key"."api_key" LIKE ? OR "billing_charge"."api_key_masked" LIKE ? OR "billing_charge"."api_key_label" LIKE ? OR CAST("api_key"."id" AS TEXT) LIKE ?`, matcher, matcher, matcher, matcher)
@@ -2839,8 +2837,16 @@ func usageObservabilityOwnerScope(scope *gorm.DB, query UsageObservabilityRecord
 			OR (NOT EXISTS (SELECT 1 FROM "billing_charge" AS "owner_any_charge" WHERE "owner_any_charge"."usage_id" = "usage"."id" AND "owner_any_charge"."user_id" IS NOT NULL)
 				AND EXISTS (SELECT 1 FROM "api_key" AS "owner_key" WHERE "owner_key"."api_key" = "usage"."api_key" AND "owner_key"."user_id" = ?)))`, *userID, *userID)
 	}
-	if actorID := normalizeOptionalUint(query.ActorUserID); actorID != nil {
-		scope = scope.Where(`EXISTS (SELECT 1 FROM "billing_charge" AS "actor_charge" WHERE "actor_charge"."usage_id" = "usage"."id" AND "actor_charge"."actor_user_id" = ?)`, *actorID)
+	return usageObservabilityActorScope(scope, query.ActorUserID)
+}
+
+func usageObservabilityActorScope(scope *gorm.DB, actorUserID *uint) *gorm.DB {
+	if actorID := normalizeOptionalUint(actorUserID); actorID != nil {
+		// Zero-token failures have no charge. Resolve their actor from the key,
+		// but never override an existing charge's historical attribution.
+		scope = scope.Where(`(EXISTS (SELECT 1 FROM "billing_charge" AS "actor_charge" WHERE "actor_charge"."usage_id" = "usage"."id" AND "actor_charge"."actor_user_id" = ?)
+			OR (NOT EXISTS (SELECT 1 FROM "billing_charge" AS "actor_any_charge" WHERE "actor_any_charge"."usage_id" = "usage"."id")
+				AND EXISTS (SELECT 1 FROM "api_key" AS "actor_key" WHERE "actor_key"."api_key" = "usage"."api_key" AND "actor_key"."created_by_user_id" = ?)))`, *actorID, *actorID)
 	}
 	return scope
 }

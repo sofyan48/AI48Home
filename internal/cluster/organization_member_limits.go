@@ -106,6 +106,7 @@ func OrganizationMemberLimitFields(member *OrganizationMemberRecord) map[string]
 		"window_mode_30d":   CanonicalOrganizationMemberWindowMode(member.WindowMode30d, PeriodWindow30d),
 		"model_groups":      OrganizationMemberModelGroupsOf(member),
 		"max_api_keys":      member.MaxAPIKeys,
+		"reset_allowance":   OrganizationMemberResetAllowanceStatusAt(member, time.Now().UTC()),
 	}
 }
 
@@ -119,10 +120,10 @@ func organizationMemberWindowSubject(member *OrganizationMemberRecord, org *User
 		userID:      member.OrgUserID,
 		actorUserID: &member.MemberUserID,
 		windows: map[string]periodWindowConfig{
-			PeriodWindow5h:  {limit: member.Limit5hCredits, mode: CanonicalOrganizationMemberWindowMode(member.WindowMode5h, PeriodWindow5h), start: member.PeriodWindowStart5h},
-			PeriodWindow1d:  {limit: member.Limit1dCredits, mode: CanonicalOrganizationMemberWindowMode(member.WindowMode1d, PeriodWindow1d), start: member.PeriodWindowStart1d},
-			PeriodWindow7d:  {limit: member.Limit7dCredits, mode: CanonicalOrganizationMemberWindowMode(member.WindowMode7d, PeriodWindow7d), start: member.PeriodWindowStart7d},
-			PeriodWindow30d: {limit: member.Limit30dCredits, mode: CanonicalOrganizationMemberWindowMode(member.WindowMode30d, PeriodWindow30d), start: member.PeriodWindowStart30d},
+			PeriodWindow5h:  {limit: member.Limit5hCredits, mode: CanonicalOrganizationMemberWindowMode(member.WindowMode5h, PeriodWindow5h), start: member.PeriodWindowStart5h, epoch: member.UsageEpoch5h},
+			PeriodWindow1d:  {limit: member.Limit1dCredits, mode: CanonicalOrganizationMemberWindowMode(member.WindowMode1d, PeriodWindow1d), start: member.PeriodWindowStart1d, epoch: member.UsageEpoch1d},
+			PeriodWindow7d:  {limit: member.Limit7dCredits, mode: CanonicalOrganizationMemberWindowMode(member.WindowMode7d, PeriodWindow7d), start: member.PeriodWindowStart7d, epoch: member.UsageEpoch7d},
+			PeriodWindow30d: {limit: member.Limit30dCredits, mode: CanonicalOrganizationMemberWindowMode(member.WindowMode30d, PeriodWindow30d), start: member.PeriodWindowStart30d, epoch: member.UsageEpoch30d},
 		},
 		weekResetDay:  DefaultWeekResetDay,
 		weekResetHour: DefaultWeekResetHour,

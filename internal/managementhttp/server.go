@@ -245,6 +245,8 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodPatch, "/organizations/:id", handler.UpdateOrganization)
 	r.Set(http.MethodDelete, "/organizations/:id", handler.DeleteOrganization)
 	r.Set(http.MethodPost, "/organizations/:id/members", handler.AddOrganizationMember)
+	r.Set(http.MethodPut, "/organizations/:id/members/:user_id/reset-allowance", handler.SetOrganizationMemberResetAllowance)
+	r.Set(http.MethodPost, "/organizations/:id/members/:user_id/period-limits/reset", handler.ResetOrganizationMemberPeriodLimits)
 	r.Set(http.MethodPatch, "/organizations/:id/members/:user_id", handler.UpdateOrganizationMember)
 	r.Set(http.MethodDelete, "/organizations/:id/members/:user_id", handler.RemoveOrganizationMember)
 	r.Set(http.MethodGet, "/organizations/:id/api-keys", handler.ListOrganizationAPIKeys)
