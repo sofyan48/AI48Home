@@ -568,6 +568,8 @@ func billingChargeResponse(record *cluster.BillingChargeRecord, admin bool) gin.
 	}
 	if admin {
 		response["user_id"] = record.UserID
+		// actor_user_id is the organization member behind an organization charge.
+		response["actor_user_id"] = record.ActorUserID
 		response["api_key_label"] = record.APIKeyLabel
 		response["api_key_masked"] = record.APIKeyMasked
 		response["original_model"] = record.OriginalModel

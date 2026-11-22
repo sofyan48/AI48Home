@@ -1787,6 +1787,8 @@ Admin charge responses also include `base_amount` (the list value after rule mul
 
 Failed usage is billed only when the upstream reported consumed tokens (for example a client-cancelled `499` stream after the prompt was processed); such charges exclude `request_price` and per-unit surcharges and record `price_snapshot.failed_request: true` with `fail_status_code`. Failed usage without tokens is never charged. Requests to `/images/generations` or `/images/edits` bill at least one image at `image_price_per_image` when CPA omits `image_count`.
 
+Admin charge responses include `actor_user_id`: the organization member whose key produced the charge (`null` for personal charges and administrator-created organization keys). Filter one organization with `user_id=<organization id>`.
+
 Admin charge responses include `cost_diagnostic`. It is empty for normal charges, `unpriced_model` when billable usage matched no enabled price rule (billed at $0), and `zero_price` when it matched a rule whose prices produced $0. The same value is recorded as `price_snapshot.cost_diagnostic`.
 
 Response shape:
@@ -1798,6 +1800,7 @@ Response shape:
       "id": "charge_xxx",
       "created_at": "2026-06-10T10:00:00Z",
       "user_id": 1,
+      "actor_user_id": null,
       "api_key_label": "Alice key",
       "api_key_masked": "cpa_...abcd",
       "provider": "openai",
