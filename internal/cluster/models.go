@@ -332,8 +332,13 @@ func (PluginTaskRecord) TableName() string {
 }
 
 type UserRecord struct {
-	ApprovalPending         bool       `gorm:"column:approval_pending;not null;default:false" json:"approval_pending"`
-	ID                      uint       `gorm:"column:id;primaryKey;autoIncrement;index:idx_user_active_order,priority:2"`
+	ApprovalPending bool `gorm:"column:approval_pending;not null;default:false" json:"approval_pending"`
+	ID              uint `gorm:"column:id;primaryKey;autoIncrement;index:idx_user_active_order,priority:2"`
+	// Kind is UserKindOrganization for shared billing accounts. Empty (legacy
+	// rows) and UserKindPersonal both mean a login-capable personal user.
+	Kind string `gorm:"column:kind;type:varchar(16);index"`
+	// OrganizationModelGroups is the model-group scope applied to organization keys.
+	OrganizationModelGroups JSONB      `gorm:"column:organization_model_groups"`
 	Username                string     `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`
 	Password                string     `gorm:"column:password;type:text"`
 	Email                   *string    `gorm:"column:email;type:text;index"`
@@ -446,6 +451,9 @@ type APIKeyRecord struct {
 	CreatedAt   time.Time      `gorm:"column:created_at"`
 	UpdatedAt   time.Time      `gorm:"column:updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_api_key_active_order,priority:1;index:idx_api_key_user_active,priority:2"`
+	// CreatedByUserID is the organization member that owns an organization key.
+	// NULL for personal keys and administrator-created organization keys.
+	CreatedByUserID *uint `gorm:"column:created_by_user_id;index"`
 }
 
 // TableName returns the database table name.

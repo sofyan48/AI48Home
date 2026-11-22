@@ -1,6 +1,6 @@
-# AI48Home User API
+# CLIProxyAPIHome User API
 
-This document describes the current DB-backed User API exposed by AI48Home. The User API is separate from the Management API and does not use the Management API secret key.
+This document describes the current DB-backed User API exposed by CLIProxyAPIHome. The User API is separate from the Management API and does not use the Management API secret key.
 
 The v8 upgrade changes the [Management API](../management/api.md) to `/v8/management`; the User API remains under `/user` with the same authentication and resource paths. `/user/api-keys` manages the signed-in user's client access keys. Upstream provider-key groups belong to Management API `/config/api-keys`, and administrator access-key operations use `/access/api-keys` relative to the management base.
 
@@ -9,8 +9,6 @@ Base URL:
 ```text
 http://<host>:<port>/user
 ```
-
-The browser user workspace is at `/app`, with sign-in at `/app/login`. These UI routes are separate from the `/user` API base.
 
 Home examples usually use port `8327`. An explicit `-addr` takes precedence; otherwise Home uses `node.port` from `cluster.yaml`. The v8 runtime config `server.port` is distributed to CPA nodes and does not configure the Home listener.
 
@@ -27,9 +25,9 @@ Verified email and password recovery are optional and disabled by default. A usa
 ```yaml
 user-email:
   enabled: true
-  public-user-url: "https://home.example.com/app"
+  public-user-url: "https://home.example.com/user.html"
   from-address: "no-reply@example.com"
-  from-name: "AI48Home"
+  from-name: "CLIProxyAPIHome"
   sender:
     type: "smtp"
     smtp:
@@ -61,7 +59,7 @@ Public routes:
 | --- | --- | --- |
 | `GET` | `/capabilities` | Reports optional User API capabilities. |
 | `GET` | `/models` | Returns the public model catalog. |
-| `POST` | `/register` | Creates a pending user; returns HTTP 202 without a bearer token. |
+| `POST` | `/register` | Creates a user and returns a bearer token. |
 | `POST` | `/login` | Password login for users without passkey and without TOTP. |
 | `POST` | `/login/totp` | Password plus TOTP login for users with TOTP enabled. |
 | `POST` | `/login/passkey` | Passkey login. |
@@ -69,9 +67,7 @@ Public routes:
 | `POST` | `/password/forgot` | Accepts a generic password-recovery request. |
 | `POST` | `/password/reset` | Consumes a reset token and sets a new password. |
 
-Passkey login begin/options are also public. Protected `/user/*` routes require a bearer token returned by a successful login response.
-
-Publicly registered users must be approved by an administrator through `POST /v8/management/users/:id/approve`. Until then, password/TOTP login, passkey login begin/finish, and bearer-session authentication (including `/me`) return HTTP 403 with `{"error":"approval_pending","message":"Your account is awaiting administrator approval."}`. Email verification and password reset neither clear approval status nor issue a session. Existing users and administrator-created users remain active.
+All other `/user/*` routes require a bearer token returned by a successful register or login response.
 The bearer token is an RS256 JWT signed with the cluster root CA private key and verified with the cluster root CA public key. Replacing the cluster root CA invalidates previously issued User API tokens.
 Bearer tokens also carry the user's current session version. A successful password change, password reset, or Management API password update increments that version and invalidates older bearer tokens. Authenticated password changes return a replacement bearer session for the current client; password reset does not log the user in.
 Password values are hashed and verified exactly as provided; leading and trailing whitespace is not trimmed. New bcrypt passwords are limited to 72 UTF-8 bytes.
@@ -108,7 +104,7 @@ Most successful delete or simple write operations return:
 { "status": "ok" }
 ```
 
-Successful login responses return:
+Successful login and register responses return:
 
 ```json
 {
@@ -166,7 +162,6 @@ The table below is extracted from the User API route group registered by `intern
 | `POST` | `/login/totp` |
 | `POST` | `/login/passkey` |
 | `GET` | `/me` |
-| `PATCH` | `/me` |
 | `PATCH` | `/password` |
 | `POST` | `/password` |
 | `POST` | `/password/forgot` |
@@ -182,13 +177,6 @@ The table below is extracted from the User API route group registered by `intern
 | `DELETE` | `/totp` |
 | `GET` | `/billing/overview` |
 | `GET` | `/billing/charges` |
-| `GET` | `/billing/balance-records` |
-| `POST` | `/billing/recharge` |
-| `GET` | `/chat/conversations` |
-| `DELETE` | `/chat/conversations` |
-| `GET` | `/chat/conversations/:id` |
-| `PUT` | `/chat/conversations/:id` |
-| `DELETE` | `/chat/conversations/:id` |
 | `GET` | `/api-keys` |
 | `POST` | `/api-keys` |
 | `POST` | `/api-key` |
@@ -225,28 +213,15 @@ Example response:
     "email_registration": true,
     "email_verification": true,
     "password_recovery": true,
-    "profile_edit": true,
-    "model_catalog": true,
-    "request_logs": true,
-    "chat_history": true
+    "model_catalog": true
   },
   "server_info": {
     "home_version": "v1.2.3",
     "home_commit": "abcdef0",
-    "home_build_date": "2026-07-20",
-    "cpa_public_url": "https://cpa.example.com/v1"
+    "home_build_date": "2026-07-20"
   }
 }
 ```
-
-`server_info.cpa_public_url` is an optional string, omitted when `user-panel.cpa-public-url` is empty or unset. Configure it in DB config (for example, `PUT /v8/management/config/user-panel/cpa-public-url` with a JSON string). The `user-panel` root is unchanged in legacy and v8 layouts:
-
-```yaml
-user-panel:
-  cpa-public-url: "https://cpa.example.com/v1"
-```
-
-Nonempty values must be absolute HTTP/HTTPS URLs without credentials; surrounding whitespace is trimmed for display. This is display-only public metadata, not a listener address, cluster setting, or downstream CPA runtime configuration, and is not forwarded to CPA nodes. Empty string clears the displayed URL. `config.yaml` is an import/export exchange format, not the runtime source of truth.
 
 The three email flags are `false` when `user-email.enabled` is false or the mail configuration is incomplete or invalid. Older Home versions may return `404` because this route does not exist.
 
@@ -274,15 +249,7 @@ Fields:
 | `password` | string | yes | Plaintext password used to create the stored password hash. |
 | `email` | string | no | Optional email. Accepted only when `email_registration` is true. It is normalized and starts unverified; it does not reserve ownership until verification succeeds. |
 
-Response: HTTP **202 Accepted**, with no bearer token or session:
-
-```json
-{"approval_pending":true,"message":"Your account is awaiting administrator approval."}
-```
-
-The account is persisted with `approval_pending: true`; this flag cannot be overridden by registration input. The client should show the message rather than enter the authenticated workspace. After administrator approval, the user can log in normally.
-
-When an email is supplied, Home applies verification-delivery limits and attempts to queue a message asynchronously; an already-owned address or a limited request is accepted without sending. Registration success does not mean the email is verified or ready for recovery.
+Response: login response shape. When an email is supplied, Home applies verification-delivery limits and attempts to queue a message asynchronously; an already-owned address or a limited request is accepted without sending. Registration success does not mean the email is verified or ready for recovery.
 
 All registration attempts are limited per source IP and globally, including username-only registration. Verification delivery has its own target-email limits. A limited response is `429 registration_rate_limited` with `Retry-After`.
 
@@ -386,26 +353,6 @@ Common errors:
 { "error": "invalid_passkey", "message": "invalid passkey" }
 { "error": "invalid_body", "message": "username and passkey_id are required" }
 ```
-
-### PATCH `/me`
-
-Edits only the bearer-authenticated user's `username` and/or `timezone`. `GET /user/capabilities` advertises `capabilities.profile_edit: true`; clients should hide editing when the flag is absent or false.
-
-```http
-PATCH /user/me
-Authorization: Bearer user.jwt.token
-Content-Type: application/json
-```
-
-```json
-{ "username": "alice-new", "timezone": "America/New_York" }
-```
-
-At least one exact, case-sensitive field is required. Values must be non-empty strings after trimming surrounding whitespace. Username follows existing user validation and active-username uniqueness rules; timezone uses the repository's Go `time.LoadLocation` validation. Omitted fields remain unchanged; empty timezone does not reset to the default.
-
-Unknown fields, aliases, nulls, wrong types, empty/non-object/malformed bodies, and trailing JSON are rejected with HTTP 400 `invalid_body`. This includes ownership selectors (`id`, `user_id`), credits, password, email, approval/session state, MFA/passkeys, billing multipliers, and period-limit settings. Invalid timezone returns `400 invalid_timezone`; a duplicate username returns `409 user_exists`. Failed requests do not mutate the user, including when combined with valid edits. The usual 1 MiB body limit applies (`413 request_too_large`).
-
-Success returns HTTP 200 with the same `{ "status": "ok", "user": ... }` profile shape as `GET /me`, including `timezone`. Only the current token owner's record is updated. No token or cookie is issued, session version is unchanged, and existing bearer sessions remain valid after a username change. Password, email/security state, credits, and limit configuration are preserved. Timezone changes affect timezone-dependent period-window evaluation, not the configured limits. Missing/invalid/expired/revoked sessions return 401; pending users return `403 approval_pending`.
 
 ### GET `/me`
 
@@ -623,8 +570,8 @@ Example response:
 ```json
 {
   "secret": "BASE32SECRET",
-  "otp_auth_url": "otpauth://totp/AI48Home:alice?...",
-  "issuer": "AI48Home",
+  "otp_auth_url": "otpauth://totp/CLIProxyAPIHome:alice?...",
+  "issuer": "CLIProxyAPIHome",
   "period": 30,
   "digits": 6,
   "algorithm": "SHA1",
@@ -640,7 +587,7 @@ Example request:
 
 ```json
 {
-  "issuer": "AI48Home",
+  "issuer": "CLIProxyAPIHome",
   "regenerate": true
 }
 ```
@@ -672,7 +619,7 @@ Fields:
 | --- | --- | --- | --- |
 | `secret` | string | yes | Base32 TOTP secret from `/totp`. |
 | `code` | string | yes | Current TOTP code. Aliases: `totp_code`, `totp-code`, `totp`. |
-| `issuer` | string | no | Issuer stored in TOTP metadata. Defaults to `AI48Home`. |
+| `issuer` | string | no | Issuer stored in TOTP metadata. Defaults to `CLIProxyAPIHome`. |
 
 Response: same shape as `POST/PATCH /password`.
 
@@ -750,9 +697,6 @@ Example response:
       "description": "Fast general purpose model.",
       "type": "chat",
       "providers": ["openai"],
-      "provider_limits": [
-        { "provider": "openai", "context_length": 128000, "max_output_tokens": 16384 }
-      ],
       "context_length": 128000,
       "max_output_tokens": 16384,
       "modalities": {
@@ -783,9 +727,8 @@ Model fields:
 | `owned_by` | string | Optional upstream owner. |
 | `type` | string | Optional model type, for example `chat`. |
 | `providers[]` | array | Provider identifiers that can serve this model. These are the same identifiers used on usage records and price rules. |
-| `provider_limits[]` | array | Provider-specific token limits. Each entry contains `provider` and, when known, `context_length` and `max_output_tokens`. Positive configured `max-context-length` values are included; otherwise catalog `context_length` and `inputTokenLimit` spellings are normalized. |
-| `context_length` | number | Common maximum input tokens across all listed providers. Omitted when unknown or when providers publish different limits; inspect `provider_limits` in that case. When no provider-specific limits are available, includes positive configured `max-context-length` or normalized catalog `context_length` and `inputTokenLimit`. |
-| `max_output_tokens` | number | Common maximum output tokens across all listed providers. Omitted when unknown or when providers publish different limits; inspect `provider_limits` in that case. When no provider-specific limits are available, normalizes `max_completion_tokens` and `outputTokenLimit`. |
+| `context_length` | number | Maximum input tokens. Includes positive configured `max-context-length`; otherwise normalizes catalog `context_length` and `inputTokenLimit`. Omitted when unknown. |
+| `max_output_tokens` | number | Maximum output tokens. Omitted when unknown; normalizes `max_completion_tokens` and `outputTokenLimit`. |
 | `modalities` | object | See below. |
 | `capabilities` | object | See below. |
 
@@ -838,9 +781,6 @@ Example response:
       "id": "gpt-4.1-mini",
       "display_name": "GPT-4.1 mini",
       "providers": ["openai"],
-      "provider_limits": [
-        { "provider": "openai", "context_length": 128000, "max_output_tokens": 16384 }
-      ],
       "context_length": 128000,
       "max_output_tokens": 16384,
       "modalities": { "status": "known", "input": ["text", "image"], "output": ["text"] },
@@ -956,194 +896,11 @@ Discount metadata is not returned in this version. Clients must not derive, infe
 
 When `status` is `insufficient_data`, no rate, latency, or throughput is published. Clients must render this as "not enough data", never as full availability. The summary is cluster-wide model health and is cached briefly in-process; it contains no per-user request data.
 
-## Period Limits
-
-### POST `/period-limits/reset`
-
-Full endpoint: `POST /user/period-limits/reset`. Requires the current user bearer session. Send **no body and no query parameters** (even `{}` is rejected). No user/window/mode selectors are accepted.
-
-One successful request consumes exactly one allowance and resets ALL enabled `5h`/`1d`/`7d`/`30d` windows, including limits of zero. Disabled (null-limit) windows are untouched. It clears enabled window starts and advances usage epochs using the existing counter-reset semantics. Limits, credits, billing charges, balance records and request history are unchanged; a zero limit remains zero.
-
-HTTP 200 response: `{"status":"ok","limits": <complete period-limit status including reset_allowance>}`. Status is rebuilt inside the same transaction as row locking, renewal, guarded decrement and window reset. Any failure rolls back all changes.
-
-HTTP 400 (`error: "invalid body"`) rejects bodies/selectors. HTTP 409 returns `error: "reset_allowance_no_enabled_windows"` when no window is enabled, or `error: "reset_allowance_unavailable"` for unconfigured, expired or exhausted allowance. Error responses contain `error` and `message`. Existing session rules apply: 401 for invalid/missing sessions; 403 `approval_pending` for pending users. Unexpected database failures return 500 `period_limits_reset_failed`.
-
-Both capability manifests advertise `capabilities.user_reset_allowance: true`. `GET /user/period-limits` includes the object:
-
-```json
-{"mode":"one_time","amount":2,"available":1,"expires_at":null,"renews_at":null}
-```
-
-`mode` is `one_time`, `monthly`, or empty when unconfigured; amount/available are non-negative integers. Unconfigured status has empty mode, zero amount/available and null timestamps. One-time expiry is RFC3339/null and makes available zero at or after expiry; renews_at is null. Monthly expires_at is null; renews_at is the next first-of-month midnight in the user timezone (default `Asia/Shanghai`), serialized as RFC3339. Each month replenishes to amount without carry, even after skipped months. Read-only status reflects lazy renewal; successful consumption persists renewal. Administrators configure the policy through `PUT /v8/management/users/:id/reset-allowance`.
-
-### GET `/period-limits`
-
-Returns the authenticated user's configured period-limit windows and current usage. This route is read-only and never exposes another user's limits.
-
-```http
-Authorization: Bearer user.jwt.token
-```
-
-Only windows with `enabled: true` are enforced. `used`, `limit`, and `remaining` are credit values; `reset_at` is the next known reset timestamp when applicable.
-
-```json
-{
-  "user_id": 42,
-  "timezone": "Asia/Shanghai",
-  "credits": 25,
-  "credits_unlimited": false,
-  "windows": [
-    {
-      "id": "7d",
-      "enabled": true,
-      "limit": 10,
-      "used": 3.5,
-      "remaining": 6.5,
-      "mode": "calendar",
-      "active": true,
-      "window_start": "2026-09-21T00:00:00Z",
-      "window_end": "2026-09-28T00:00:00Z",
-      "reset_at": "2026-09-28T00:00:00Z"
-    }
-  ]
-}
-```
-
-## User-Owned Request Log Summaries
-
-### GET `/request-logs`
-
-Full endpoint: `GET /user/request-logs`. Requires the current user's bearer session; missing, invalid, expired, revoked, or deleted-user sessions return `401`. Pending users return `403 approval_pending`. `GET /user/capabilities` advertises `request_logs: true`; older builds may omit this flag.
-
-Only these query parameters are supported:
-
-| Parameter | Meaning |
-| --- | --- |
-| `from` | Optional RFC3339 timestamp (fractional seconds and timezone offsets accepted), inclusive. |
-| `to` | Optional RFC3339 timestamp, exclusive. |
-| `request_id` | Optional exact request ID; no substring, suffix, wildcard, or broad search. |
-| `limit` | Positive integer; default 50, clamped to 200. |
-| `offset` | Non-negative integer; default 0. |
-
-Invalid dates (including explicit empty values, date-only strings, and Unix seconds), reversed time ranges, malformed/overflowing integers, non-positive limits, and negative offsets return `400`. Equal time boundaries produce an empty range. Unknown parameters are ignored: `user_id`, `user`, `api_key`, key IDs, `key`, `search`, and administrative filters cannot change ownership, matching, or counts.
-
-```json
-{
-  "items": [
-    {
-      "timestamp": "2026-06-10T01:02:03Z",
-      "event_type": "completion",
-      "status": "success",
-      "model": "gpt-4.1-mini",
-
-      "tokens": 1500,
-      "latency_ms": 123,
-      "request_id": "req-first"
-    }
-  ],
-  "total": 1,
-  "limit": 50,
-  "offset": 0,
-  "summary": {
-    "by_model": [{"model": "gpt-4.1-mini", "requests": 1}],
-    "average_latency_ms": 123,
-    "status": {"success": 1, "failed": 0}
-  }
-}
-```
-
-The response envelope contains `items`, `total`, `limit`, `offset`, and the additive `summary`. SQL aggregates cover **all matching rows before pagination**, using exactly the same ownership, `from`, `to`, and exact `request_id` scope as the items and `total`. `summary` contains:
-
-- `by_model`: `{model: string, requests: number}` entries for every matching model, ordered by `requests` descending, then `model` ascending, without truncation.
-- `average_latency_ms`: the numeric average of positive `latency_ms` measurements only; values `<= 0` are unmeasured and excluded. Returns `null` when no matching row has a positive measurement.
-- `status`: `{success: number, failed: number}`, counted from the same stored failed flag used by item status. Counts sum to `total`; failed rows are included only when they have trustworthy historical attribution.
-
-No matches return `summary: {"by_model": [], "average_latency_ms": null, "status": {"success": 0, "failed": 0}}`. An empty page beyond the last matching row still returns the full filtered summary and `total`.
-
-Every item contains exactly these seven keys: Time (`timestamp`, UTC RFC3339), Event (`event_type`), Status (`status`), Model (`model`), Tokens (`tokens`, accounting total), Latency (`latency_ms`), and Request ID (`request_id`). Event categories are `completion`, `embedding`, `response`, `message`, `stream`, or `unknown`; arbitrary event metadata is not returned. Status is `success` or `failed`, never an error detail or HTTP status code. Items are ordered by timestamp descending, then internal usage ID descending; that ID is not exposed. `total` is the ownership- and filter-scoped count before pagination. Empty results use `items: []`.
-
-Ownership is established only by the historical `billing_charge.user_id` snapshot linked to the usage record, captured when usage is ingested and billing attribution is recorded. The list, count, and every summary aggregate require this snapshot to match the authenticated user ID. There is **no fallback to the API key's current owner**, no payload-supplied user attribution, and no backfill from current bindings. Reassigning or deleting keys does not transfer historical logs; deleting a user invalidates access and does not transfer their logs to another user. Records with missing/null/unknown attribution are excluded, including legacy, failed, or non-billable records without a snapshot. This endpoint is therefore a fail-closed summary of attributed usage, not a complete raw request-log archive.
-
-Provider, HTTP status codes, client/key identifiers, secrets, routing, billing data, raw payloads, error details, and download URLs are never returned. This endpoint grants no access to administrative list/detail/file-download APIs.
-
-## Playground Chat History
-
-The user panel's chat playground stores conversations per user under `/user/chat/conversations`. All routes require the current user's bearer session (`401` without it, `403 approval_pending` for pending users). Ownership comes only from that session: conversations of other users are reported as `404 not_found`, and no route accepts a `user_id`. `GET /user/capabilities` advertises `chat_history: true`; older builds omit the flag, and clients should fall back to browser-local storage.
-
-Home stores only the transcript the client sends. It never calls models for these routes, and the Management API has no route that reads conversations. Deleting a user deletes their conversations.
-
-Conversation IDs are generated by the client: 1-64 characters from `A-Z a-z 0-9 - _`. Other IDs return `400 invalid_chat_id`.
-
-Limits:
-
-- A user keeps at most 100 conversations. Saving prunes the least recently updated beyond that limit.
-- One conversation holds at most 500 messages, and a save request body may be at most 4 MiB (`413 request_too_large`).
-- `title` is trimmed to 200 characters. When empty, it is derived from the first user message (60 characters).
-
-### GET `/chat/conversations`
-
-Lists conversations, most recently updated first, without messages.
-
-```json
-{
-  "items": [
-    {
-      "id": "chat-m3k2a1-0",
-      "title": "Summarize a long article",
-      "model": "gpt-5",
-      "message_count": 4,
-      "created_at": "2026-11-16T10:00:00Z",
-      "updated_at": "2026-11-16T10:05:00Z"
-    }
-  ],
-  "limit": 100
-}
-```
-
-### GET `/chat/conversations/:id`
-
-Returns one conversation with `messages` in `{"conversation": {...}}`. Unknown IDs return `404 not_found`.
-
-### PUT `/chat/conversations/:id`
-
-Creates the conversation or replaces its title, model, and messages. `created_at` is kept on replacement and `updated_at` is set to the server time.
-
-```json
-{
-  "title": "Summarize a long article",
-  "model": "gpt-5",
-  "messages": [
-    { "id": "msg-1", "role": "user", "content": "Summarize this…" },
-    {
-      "id": "msg-2",
-      "role": "assistant",
-      "content": "Key points: …",
-      "reasoning": "",
-      "model": "gpt-5",
-      "stopped": false,
-      "error": "",
-      "usage": { "prompt_tokens": 120, "completion_tokens": 80, "total_tokens": 200 },
-      "latency_ms": 1840
-    }
-  ]
-}
-```
-
-`messages` must be non-empty, and every `role` must be `user` or `assistant`. Otherwise the route returns `400 invalid_chat`. Unknown message fields are ignored. The response is the saved conversation in `{"conversation": {...}}`.
-
-### DELETE `/chat/conversations/:id`
-
-Deletes one conversation and returns `{"status": "ok"}`. Unknown IDs return `404 not_found`.
-
-### DELETE `/chat/conversations`
-
-Deletes every conversation of the current user and returns `{"status": "ok"}`.
-
 ## Billing
 
-User billing routes are under the `/user` base path: `/user/billing/overview`, `/user/billing/charges`, `/user/billing/balance-records`, and `/user/billing/recharge`. All require the existing bearer session. Identity comes strictly from that session; supplied `user_id` values in query parameters or JSON are ignored.
+User billing routes are under the `/user` base path, so the full paths are `/user/billing/overview` and `/user/billing/charges`. Both routes require the existing bearer token returned by `/user/register` or `/user/login`, and responses are scoped to the authenticated bearer user only.
 
-User billing responses do not include admin notes, global totals, model price management data, proxy-pool data, raw API keys, masked API keys, price snapshots, matched price rules, endpoint, or other users' data. Charge items omit `balance_before`; balance ledger items include it but omit stored notes and operator metadata.
+User billing responses do not include admin notes, global totals, model price management data, proxy-pool data, raw API keys, masked API keys, price snapshots, matched price rules, endpoint, `balance_before`, or other users' data.
 
 User billing `from` and `to` query parameters accept `YYYY-MM-DD`, RFC3339, or Unix seconds and use the half-open interval `[from,to)`. Unix-second values must be between `2000-01-01T00:00:00Z` and `9999-12-31T23:59:59Z`; millisecond timestamps are rejected. A date-only `to` becomes the next UTC midnight so the whole ending UTC day is included. Explicit timestamp `to` values are exact exclusive boundaries and are not expanded. Clients that need a full natural day outside UTC should send RFC3339 boundaries from local midnight to the next local midnight, for example `2026-06-10T00:00:00+08:00` through `2026-06-11T00:00:00+08:00`.
 
@@ -1192,48 +949,6 @@ Overview fields:
 | `today_spend` | number | Spend value returned by the current billing overview query. |
 | `month_spend` | number | Spend value returned by the current billing overview query. |
 | `top_models[]` | array | Model spend entries with `id`, `label`, `amount`, and `request_count`. |
-| `total_charge_amount` | number | User charge total in the selected range. |
-| `total_recharge_amount` | number | User recharge ledger total in the selected range. |
-| `total_deduct_amount` | number | User manual deduction ledger total in the selected range (not request charges). |
-| `request_count` | integer | User billed request count in the selected range. |
-| `input_tokens`, `output_tokens`, `cache_tokens` | integer | User billed token totals in the selected range. |
-
-Without date filters, totals cover all available records. `current_balance` is always the current balance, not a historical balance. Existing `today_spend` and `month_spend` retain their behavior: both report the selected range's charge total.
-
-### GET `/billing/balance-records`
-
-Returns only the session user's recharge and manual deduction ledger records, newest first. Supports the same `from`/`to` boundaries as charges and `limit` (default `50`, maximum `200`) / `offset` (default `0`). Non-positive/non-integer limits and negative/non-integer offsets return `400`. Supplied user filters are ignored.
-
-Response: `200 { "items": BalanceRecord[], "total": integer, "limit": integer, "offset": integer }`. `total` counts the user's matching records before pagination; empty pages return `items: []`.
-
-`BalanceRecord` fields: `id` (string), `type` (`recharge` or `deduct`), `amount` (number), `balance_before` (number), `balance_after` (number), and `created_at` (RFC3339 string). Notes, operator metadata, and user IDs are not exposed.
-
-### POST `/billing/recharge`
-
-Submits a self-topup request for **administrator approval**. Submission does not change the balance or create a ledger record. This is not a payment integration. Only one pending request is allowed per user; a second submission returns `409 topup_pending`.
-
-Request: `{ "amount": 12.5, "note": "optional audit note" }`. `amount` is required and must be a positive finite JSON number. Missing/null/zero/negative amounts return `400 invalid_amount`; malformed JSON, wrong field types, NaN, Infinity, and numeric overflow return `400 invalid_body`. A finite amount that would overflow the balance or is too small to increase its float64 representation returns `400 invalid_amount`. Optional `note` is trimmed and stored in the request, then copied into the approved ledger. Supplied `user_id`, `operator`, or `type` fields cannot change the target or operation.
-
-Response: HTTP **202**, with the unchanged balance:
-
-```json
-{
-  "request": {
-    "id": 123, "user_id": 1, "amount": 12.5, "note": "optional audit note",
-    "status": "pending", "created_at": "2026-10-07T10:00:00Z",
-    "updated_at": "2026-10-07T10:00:00Z", "approved_at": null, "ledger_id": null
-  },
-  "current_balance": 10
-}
-```
-
-Request IDs are numeric; ledger IDs are strings. Approval is performed through `POST /v8/management/users/:id/topup/approve` with the exact `request_id`. Approval credits the immutable database amount exactly once and stores the ledger reference and approval timestamp in the same transaction. Existing `credits_unlimited` behavior is preserved: approval creates a ledger record without changing the numeric balance. Authentication failures return `401`; accounts awaiting account approval return `403 approval_pending`. Database failures return `500 billing_recharge_failed` without a partial mutation.
-
-### GET `/billing/recharge-request`
-
-Authenticated user only. Returns `200 { "request": RechargeRequest | null }`, using the request fields above. It returns only the session user's pending request and ignores supplied user IDs. After approval it returns `null` unless a new pending request exists. Authentication failures return `401` (or `403 approval_pending` for an unapproved account); database errors return `500 billing_recharge_request_load_failed`.
-
-Both `GET /user/capabilities` and `GET /v8/management/capabilities` advertise `capabilities.topup_approval: true`. Clients should gate the approval flow on this flag; missing/false means an older deployment does not advertise this contract. Requests are persistent in `billing_recharge_request`; schema/snapshot version 9 includes pending and approved requests. Older snapshot formats remain importable and restore without recharge requests.
 
 ### GET `/billing/charges`
 
@@ -1311,7 +1026,7 @@ API key routes operate only on API keys bound to the authenticated `user.id`.
 
 ### GET `/api-keys`
 
-Lists API keys owned by the authenticated user. Each item includes `display_name` (null when unset); create and update return the same item shape.
+Lists API keys owned by the authenticated user.
 
 Headers:
 
@@ -1328,7 +1043,6 @@ Example response:
       "id": 1,
       "api-key": "client-key",
       "api_key": "client-key",
-      "display_name": "Production key",
       "channels": [1],
       "model_groups": [2],
       "created_at": "2026-06-02T10:00:00Z",
@@ -1340,7 +1054,6 @@ Example response:
       "id": 1,
       "api-key": "client-key",
       "api_key": "client-key",
-      "display_name": "Production key",
       "channels": [1],
       "model_groups": [2],
       "created_at": "2026-06-02T10:00:00Z",
@@ -1365,7 +1078,6 @@ Example request:
 ```json
 {
   "api_key": "client-key",
-  "display_name": "Production key",
   "channels": [1],
   "model_groups": [2]
 }
@@ -1376,9 +1088,8 @@ Fields:
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `api_key` | string | no | Client API key. Aliases: `api-key`, `key`, `value`. |
-| `display_name` | string or null | no | Optional label; trimmed, at most 128 Unicode characters, and cannot contain control characters. Empty/whitespace or `null` clears it. |
 | `channels` | array of integer | no | Channel group IDs. Empty or omitted means non-restrictive. |
-| `model_groups` | array of integer | no | Model group IDs. Alias: `model-groups`. When omitted, Home inherits the union of model groups from the user's active API keys; if none are scoped, the new key is non-restrictive. Send an empty array explicitly to create a non-restrictive key. |
+| `model_groups` | array of integer | no | Model group IDs. Alias: `model-groups`; empty or omitted means non-restrictive. |
 
 Example response:
 
@@ -1388,7 +1099,6 @@ Example response:
     "id": 1,
     "api-key": "client-key",
     "api_key": "client-key",
-    "display_name": "Production key",
     "channels": [1],
     "model_groups": [2],
     "created_at": "2026-06-02T10:00:00Z",
@@ -1411,7 +1121,6 @@ Example request:
 {
   "id": 1,
   "api_key": "new-client-key",
-  "display_name": "Renamed key",
   "channels": [],
   "model_groups": []
 }
@@ -1426,7 +1135,6 @@ Fields:
 | `old` | string | conditionally | Target API key value. |
 | `new` | string | no | New API key value. |
 | `new_api_key` | string | no | New API key value. Alias: `new-api-key`. |
-| `display_name` | string or null | no | Optional label; omitted preserves the current value, while empty/whitespace or `null` clears it. Same validation as create. |
 | `channels` | array of integer | no | Replacement channel group IDs. |
 | `model_groups` | array of integer | no | Replacement model group IDs. Alias: `model-groups`. |
 
@@ -1438,7 +1146,6 @@ Common errors:
 { "error": "not_found", "message": "record not found" }
 { "error": "invalid_body", "message": "api key id or value is required" }
 { "error": "api_key_exists", "message": "api key already exists" }
-{ "error": "invalid_display_name", "message": "API key display_name is invalid: control characters are not allowed" }
 ```
 
 ### PATCH `/api-key`

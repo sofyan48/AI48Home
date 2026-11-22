@@ -835,6 +835,11 @@ func ensureAPIKeyUserBillingAllowed(ctx context.Context, db *gorm.DB, record *AP
 	if !user.CreditsUnlimited && user.Credits <= 0 {
 		return fmt.Errorf("%s: %s", homeerrors.TypeUserCreditsInsufficient, homeerrors.MessageUserCreditsInsufficient)
 	}
+	if user.IsOrganization() {
+		if errMember := ensureOrganizationMemberKeyAllowed(ctx, db, record, user.ID); errMember != nil {
+			return errMember
+		}
+	}
 	if !userPeriodLimitsEnabled(&user) {
 		return nil
 	}

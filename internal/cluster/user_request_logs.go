@@ -13,8 +13,10 @@ type UserRequestLogQuery struct {
 	From      *time.Time
 	To        *time.Time
 	RequestID string
-	Limit     int
-	Offset    int
+	// ActorUserID narrows organization logs to one member's keys.
+	ActorUserID *uint
+	Limit       int
+	Offset      int
 }
 
 type UserRequestLogSummary struct {
@@ -68,8 +70,12 @@ func (r *Repository) ListUserRequestLogs(ctx context.Context, userID uint, query
 		Items: make([]UserRequestLogSummary, 0), Limit: query.Limit, Offset: query.Offset,
 		Summary: UserRequestLogAggregates{ByModel: make([]UserRequestLogModelCount, 0)},
 	}
-	scope := db.WithContext(contextOrBackground(ctx)).Table("usage").
-		Where(`EXISTS (SELECT 1 FROM "billing_charge" WHERE "billing_charge"."usage_id" = "usage"."id" AND "billing_charge"."user_id" = ?)`, userID)
+	scope := db.WithContext(contextOrBackground(ctx)).Table("usage")
+	if actorID := normalizeOptionalUserID(query.ActorUserID); actorID != nil {
+		scope = scope.Where(`EXISTS (SELECT 1 FROM "billing_charge" WHERE "billing_charge"."usage_id" = "usage"."id" AND "billing_charge"."user_id" = ? AND "billing_charge"."actor_user_id" = ?)`, userID, *actorID)
+	} else {
+		scope = scope.Where(`EXISTS (SELECT 1 FROM "billing_charge" WHERE "billing_charge"."usage_id" = "usage"."id" AND "billing_charge"."user_id" = ?)`, userID)
+	}
 	if query.From != nil {
 		scope = scope.Where(`"usage"."timestamp" >= ?`, query.From.UTC())
 	}

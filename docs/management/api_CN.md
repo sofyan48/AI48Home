@@ -1,6 +1,6 @@
-# AI48Home Cluster Management API 文档
+# CLIProxyAPIHome Cluster Management API 文档
 
-本文档描述 AI48Home 当前 DB-backed Management API。Home 启动时会初始化 runtime database，并注册 Home runtime 使用的 database-backed management route set。
+本文档描述 CLIProxyAPIHome 当前 DB-backed Management API。Home 启动时会初始化 runtime database，并注册 Home runtime 使用的 database-backed management route set。
 
 基础路径：
 
@@ -13,18 +13,14 @@ http://<host>:<port>/v8/management
 ```text
 GET /
 GET /index.html
-GET /admin
-GET /admin/*
-GET /app
-GET /app/*
+GET /management.html
+GET /user.html
 GET /assets/*
 ```
 
-Panel assets 会在构建时内嵌到二进制中。管理员入口使用 `/admin`（连接页面为 `/admin/connect`），用户工作区入口使用 `/app`（登录页面为 `/app/login`）。旧的 `/management.html` 和 `/user.html` 路由仍作为兼容别名保留，但新链接和部署说明应使用 `/admin` 和 `/app`。
+Panel assets 会在构建时内嵌到二进制中。
 
 Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 使用 `cluster.yaml` 中的 `node.port`。runtime config 的 `server.port` 仅下发给 CPA 节点，不参与 Home 监听端口配置。
-
-用户可通过需认证的 `PATCH /user/me` 自助修改资料，仅允许 `username` 和 `timezone`。`/user/capabilities` 返回 `capabilities.profile_edit: true`；详见 [资料编辑契约](../user/api_CN.md#patch-me)。管理员用户更新与 session/安全行为保持不变。
 
 ## API 版本
 
@@ -34,20 +30,10 @@ Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 
 | --- | --- | --- |
 | Management API | `/v8/management` | 配置树和 Home 管理资源。 |
 | 已移除的 Management API | `/v0/management` | 已移除，请使用 v8 路由和请求体。 |
-| User API | `/user` | 基础路径及用户 token 认证保持不变，见 [User API](../user/api_CN.md)。新增需用户认证的 `GET /user/analytics`，提供有界 UTC 日期范围内按天、模型、API key 汇总的用量与实际扣费，可供客户端导出 CSV；详见 [User analytics](user-analytics.md)。 |
+| User API | `/user` | 基础路径及用户 token 认证保持不变，见 [User API](../user/api_CN.md)。 |
 | 插件资源 | `/v0/resource/plugins/...` | Home 返回的资源 URL 保留原路径。 |
 
 v8 配置格式声明 `config-version: 8`。它与 Home 发布版本号独立，也不表示 User API 或 RESP 协议升级到 v8。下方字段参考使用 v8 YAML/JSON 配置键路径；通过 HTTP 访问子树时，将点号换成 `/`。
-
-## Worker 离线告警
-
-`node_offline` 规则使用 `cpa_node_membership` 中的订阅心跳时间，而不是连接快照的更新时间。仅在没有 membership 记录时回退到连接快照。没有快照的活动 membership 也会被跟踪，已记录的最后心跳时间不会倒退。告警标题使用 `Worker offline:`，API 字段和规则 key 保持不变。详见 [Alerting](alerting.md)。
-
-## 手动解除告警
-
-`POST /alerting/alerts/resolve`（基础路径 `/v8/management`，使用正常的管理认证）接收 `{"key":"node_offline:node/a"}`。请将告警列表返回的完整 key 放在 JSON 请求体中，以支持包含 `/` 的 key。成功返回 `200 {"status":"ok"}`；无效请求体或 key 返回 `400`，不存在或尚未触发的告警返回 `404 alert_not_found`，数据库或配置错误返回 `500 alerting_alert_resolve_failed`。
-
-此操作仅删除指定的已触发告警状态，不影响其他告警或节点跟踪。这是一次性重置，不是持久抑制：如果条件仍然成立，下一次评估仍可按规则的正常等待期再次触发。`send_resolved` 为 true 时，删除成功后向已启用的通道发送解除通知，详情明确为 `Manually resolved by an operator.`；发送失败仅记录日志，不撤销重置。忘记节点仍是单独的操作。请求校验、通知行为及并发限制详见 [Alerting](alerting.md#post-alertingalertsresolve)。
 
 ## Runtime 模型
 
@@ -74,11 +60,6 @@ Home management state 存储在 database-backed cluster repository 中。如果�
 | 远程请求 | 需要启用远程管理，例如 `management.allow-remote: true`，或者内部 override。 |
 | API 未启用 | 未设置 `management.secret-key` 且未设置 `MANAGEMENT_PASSWORD` 时，Management API route 通常返回 `404`。 |
 | 失败封禁 | 同一客户端 IP 连续 5 次失败后封禁 30 分钟；封禁期间即使 key 正确也会失败。 |
-
-仅限本地开发：设置 `HOME_DEV_DISABLE_MANAGEMENT_IP_BAN=true` 可禁用
-`/v8/management` 的认证失败 IP 计数和封禁。开发 Compose 已启用此选项，
-生产环境默认行为不变。仍需有效管理密钥和远程访问权限。
-修改环境变量后需重新创建容器。请勿在生产环境启用。
 
 常见认证错误：
 
@@ -266,13 +247,10 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/usage/session-tree` |
 | `GET` | `/users` |
 | `POST` | `/users` |
-| `POST` | `/users/:id/approve` |
-| `POST` | `/users/:id/topup/approve` |
 | `DELETE` | `/users/:id` |
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
 | `PUT` | `/users/:id` |
-| `PUT` | `/users/:id/reset-allowance` |
 | `GET` | `/users/:id/period-limits` |
 | `POST` | `/users/:id/period-limits/reset` |
 
@@ -694,20 +672,14 @@ Home 在数据库和下发配置中保留兼容的
 
 ### GET `/server/latest-version`
 
-通过 GitHub release API 获取 AI48Home 最新版本；配置 `proxy-url` 时会使用该代理。
+通过 GitHub release API 获取 CLIProxyAPIHome 最新版本；配置 `proxy-url` 时会使用该代理。
 
 输入：无。
 
 输出示例：
 
 ```json
-{ "latest-version": "v7.0.0", "release-published": true }
-```
-
-仓库尚未发布任何 release（GitHub 返回 404）时，该接口返回 HTTP 200，而不是错误：
-
-```json
-{ "latest-version": "", "release-published": false }
+{ "latest-version": "v7.0.0" }
 ```
 
 常见错误码：
@@ -1061,22 +1033,6 @@ User records 存储在 cluster repository 中。
 }
 ```
 
-所有管理接口用户响应均包含布尔字段 `approval_pending`。公开注册设置为 `true`；现有用户和通过 `POST /users` 创建的用户默认为 `false`。通用用户创建/更新请求不能修改此标志。
-
-### POST `/users/:id/approve`
-
-批准公开注册的账户。与其他 `/users` 管理路由一样，需要管理员 Management API 认证；用户 bearer token 无权调用。无需请求体，`id` 必须为正整数用户 ID。
-
-可选请求体：`{"model_groups": [1, 2]}`。提供时，`model_groups` 必须是非空正整数 ID 数组，引用存在、未删除且启用（`disabled: false`）的模型组。Home 将范围赋给待审批用户所有有效（未删除）API key，保留 key 值、显示名称、channel 绑定及其他字段。如果没有有效 key，则创建一个密码学随机的 `sk-` key，使用指定范围及空 channel 绑定。范围验证、key 修改、配置事件及清除 `approval_pending` 在同一数据库事务中提交；失败时用户保持待审批，key 不变。省略请求体或 `model_groups` 保留仅审批的旧行为，不创建或修改 key。
-
-返回 HTTP 200，结构为 `{"user": ...}`，与 `GET /users/:id` 相同，其中 `approval_pending: false`。响应不包含 API key 值；用户登录后可通过 `GET /user/api-keys` 获取。创建用户新 key 时省略 `model_groups`，会继承该用户所有有效 key 的模型组 ID 并集；显式空数组保留现有无限制 key 行为。模型范围保存在 API key 上，而非用户记录上。
-
-审批不会改变密码、MFA、passkey 或 session version，也不会签发 session。已审批用户重复请求成功，但不会修改范围、生成 key 或增加配置事件（格式正确的范围被忽略）。JSON 格式错误返回 HTTP 400 `invalid body`；空/null 范围、类型错误、非正整数 ID 或禁用模型组返回 HTTP 400 `invalid_model_groups`；无效用户 ID 返回 HTTP 400 `invalid id`。不存在或已删除的用户/模型组返回 HTTP 404 `not_found`。数据库失败返回 HTTP 500 `user_approve_failed`。带范围的审批提交后刷新管理运行时配置；刷新失败返回 HTTP 500 `reload_failed`，但不会撤销已提交审批，重试不会重新分配范围。
-
-待审批用户在 User API 密码/TOTP/passkey/session 认证时收到 HTTP 403 `approval_pending`。邮箱验证和密码重置不会批准账户。详见 [User API](../user/api_CN.md)。
-
-启动迁移添加非空 `approval_pending` 列，默认 `false`（数据库/快照版本 8）。旧快照仍受支持，恢复的旧用户保持可用。
-
 ### GET `/users/:id`
 
 按数字 ID 读取单个用户。
@@ -1111,28 +1067,6 @@ Path 参数：
 ```
 
 用户记录包含 `period_limits_summary`：由记录本身推导的轻量概览（不查询用量）。`enabled_windows` 列出已配置限额的窗口（`5h`/`1d`/`7d`/`30d`），`zero_limit_windows` 列出限额为 `0`（立即阻断）的窗口。实时 used/remaining 请使用 `GET /users/:id/period-limits`。
-
-### 自助充值批准
-
-`GET /users` 和 `GET /users/:id` 的用户对象增加 `pending_topup`：没有待批准申请时为 `null`，否则为 `{id,user_id,amount,note,status,created_at}`。ID 为数字，状态为 `pending`，时间为 RFC3339。列表通过一次查询批量读取申请，不逐用户查询。此契约支持 **Users & Access 用户列表** 的批准操作，本次不修改 UI。账号批准（`approval_pending`、`/users/:id/approve`）独立且保持不变。
-
-#### POST `/users/:id/topup/approve`
-
-必须使用 Management API 认证，普通 User API bearer token 不可使用。请求：`{ "request_id": 123 }`；ID 必填且必须为正整数。金额和备注只读取数据库申请，不使用批准请求中的金额或备注。申请必须属于路径中的用户。
-
-响应：`200 { "user": UserMap, "record": BalanceLedgerRecord, "current_balance": number }`。分类账包含字符串 `id`、`user_id`、`type: "recharge"`、原始 `amount` 和 `note`、`operator: "admin"`、`balance_before`、`balance_after`、`created_at`。批准后 `user.pending_topup` 为 `null`。重复批准返回同一分类账记录及当前余额，不会重复入账；如果用户已经提交新申请，重试旧 ID 会在用户对象中返回新 `pending_topup`，但绝不会批准新申请。
-
-| HTTP | Error | 说明 |
-| --- | --- | --- |
-| 400 | `invalid_request_id` | ID 缺失/null/零/负数/小数/非数字/越界，或请求体非法。 |
-| 400 | `invalid id` | 用户路径 ID 非法，沿用既有验证。 |
-| 400 | `invalid_amount` | 存储金额非法、余额将溢出或 float64 加法无法增加余额；申请保持待批准，分类账和余额不变。 |
-| 401 | Management 认证错误 | 管理密钥缺失或非法，包括使用普通用户 token。 |
-| 404 | `topup_request_not_found` | 用户或申请不存在，或申请属于其他用户。 |
-| 500 | `topup_approve_failed` | 事务失败并回滚。 |
-| 500 | `billing_recharge_request_load_failed` | 响应中的待批准申请读取失败；可安全重试同一 ID。 |
-
-批准锁定用户，在同一事务内更新余额、分类账、`approved` 状态、`ledger_id`、`approved_at` 和 `updated_at`。数据库部分唯一索引保证每个用户最多一笔 `pending` 申请。`credits_unlimited` 保持既有语义：生成分类账但不改变数值余额。申请持久化于 `billing_recharge_request`，数据库/快照版本 9 包含此表；版本 1–8 仍可导入且不包含申请。用户和管理能力 API 均声明 `topup_approval: true`，客户端应依此兼容旧部署。
 
 ### POST `/users`
 
@@ -1219,28 +1153,6 @@ JSON 语法错误，或请求体无法解析到足以可靠定位具体字段时
 
 输出：与 `GET /users/:id` 相同。
 
-
-### PUT `/users/:id/reset-allowance`
-
-完整端点：`PUT /v8/management/users/:id/reset-allowance`，需要 Management API 认证。
-
-```json
-{"mode":"one_time","amount":2,"expires_at":null}
-```
-
-`mode` 必填，只接受 `one_time` 或 `monthly`；`amount` 必填，为非负有符号 64 位整数。`expires_at` 可省略（等同 null），或为 RFC3339 时间/null；monthly 不允许非 null 过期时间。每次成功设置均替换唯一策略，并立即将数据库余额初始化为 `amount`，不重置窗口，不改变 credits 或历史。amount 为零时无法消费。
-
-HTTP 200 返回 `{"user": <管理用户对象>}`。用户列表/详情对象及周期限额状态包含 `reset_allowance`：
-
-```json
-{"mode":"monthly","amount":2,"available":2,"expires_at":null,"renews_at":"2026-11-01T00:00:00Z"}
-```
-
-`available` 为当前有效余额。one_time 的 `renews_at` 为 null，到达或超过 `expires_at` 后不可消费。monthly 的 `expires_at` 为 null，按用户时区（默认 `Asia/Shanghai`）每月一日零点补充至 amount，不结转，跳过多个月也只补充一次。读取只计算有效状态；消费时在事务内持久化续期。时间为 RFC3339。未配置时返回 `{"mode":"","amount":0,"available":0,"expires_at":null,"renews_at":null}`。
-
-无效请求/策略返回 HTTP 400；用户不存在返回 404。策略校验的 `field_errors` code 为 `invalid_reset_allowance_mode`、`invalid_reset_allowance_amount` 或 `invalid_reset_allowance_expiry`。管理及用户 capability 均声明 `capabilities.user_reset_allowance: true`。
-
-原有管理员 `POST /users/:id/period-limits/reset` 保留窗口选择及模式行为，不消费此额度。
 
 ### GET `/users/:id/period-limits`
 
@@ -1620,8 +1532,6 @@ Query 参数：
 ## Billing
 
 本节所有路径都相对于 Management API 基础 URL，例如 `/v8/management/billing/overview` 或 `/v8/management/proxy/proxy-pools`。这些不是 `/user` 路由，调用时需要管理密钥。
-
-独立的 [User API 计费接口](../user/api_CN.md#billing) 提供 session 范围的分类账、概览、`POST /user/billing/recharge` 和 `GET /user/billing/recharge-request`。自助充值必须由管理员批准：提交返回 HTTP 202，不修改余额、不生成分类账；已有待批准申请时再次提交返回 `409 topup_pending`。管理员通过下述 `/users/:id/topup/approve` 批准，分类账操作人为 `admin`。管理员直接充值/扣减路由保持不变。导致非有限余额的更新会失败并回滚。
 
 只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。三个路由统一使用半开区间 `[from,to)`：包含 `from`，不包含 `to`。可选的 `timezone` 参数是报表时区覆盖，并且必须是 IANA 时区名称。未提供时，路由使用 `/billing/settings.report_timezone`，该设置默认为 `UTC`。纯日期值使用实际报表时区中的日历日期，纯日期形式的 `to` 会规范化为下一个本地零点，因此即使跨越 DST，也会完整包含结束日期。显式时间戳是精确的排他上界，不会因报表时区被移动或扩展。`/billing/overview` 还使用实际报表时区生成 `range` 日历日期和 `daily_trend` 分桶，因此一个自然日不会在 UTC 午夜被拆成两天。报表时区只控制查询边界和报表分组，不会重新计算不可变 charge、修改价格快照或改变用户余额。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/proxy/proxy-pools` 当前不解析查询参数。
 
@@ -2557,7 +2467,6 @@ Selector 字段：
 | `proxy-url` | string | `proxy_url` 的 alias。 |
 | `headers` | object string to string | 额外上游 headers。空字符串会删除单个 header。 |
 | `priority` | integer or numeric string | 凭证选择优先级。 |
-| `weight` | integer 或 `null` | weighted-round-robin 凭证权重，最大为 `1000000`。非正整数规范化为 `0`（仅在加权路由中排除该凭证）。`null` 删除显式权重及调度器 attribute 覆盖，恢复默认值 `1`；省略则保持不变。字符串、小数、指数表示法、超出范围的整数及 `weight` 下的 nested path 返回 `400`，不会应用 metadata 或 policy 修改。 |
 | `note` | string | 操作备注；空值清空。 |
 | `websockets` | boolean or string bool | 支持的 auth 的 runtime websocket flag。 |
 | `disabled` | boolean or string bool | 更新 auth disabled state 和 status。 |
@@ -3013,7 +2922,6 @@ Home 管理的 CPA 使用数据库支持的 observation 配置。`credentials.in
 | `capabilities.quota_snapshots` | boolean | 是否支持 DB-backed `GET /quota/credentials` 额度快照列表。 |
 | `capabilities.quota_snapshot_details` | boolean | 是否支持 `GET /quota/credentials/:credential_id`。 |
 | `capabilities.quota_recollect` | boolean | 是否支持 `POST /quota/collect` 按需额度采集。 |
-| `capabilities.codex_reset_credit_consume` | boolean | 是否支持 Codex OAuth reset credit 消费。 |
 | `capabilities.usage_overview` | boolean | 是否支持 `GET /usage/overview`。 |
 | `capabilities.usage_records` | boolean | 是否支持 `GET /usage/records`。 |
 | `capabilities.usage_record_details` | boolean | 是否支持 `GET /usage/records/:id`。 |
@@ -3035,7 +2943,6 @@ Home 管理的 CPA 使用数据库支持的 observation 配置。`credentials.in
 | `capabilities.model_channel_bindings` | boolean | model group detail 是否支持通过 `channels` 配置模型级 channel group 绑定。 |
 | `capabilities.topology` | boolean | 是否支持 `GET /topology` Home + CPA 集群拓扑接口。 |
 | `capabilities.users` | boolean | 是否支持 `/users` 用户管理路由。 |
-| `capabilities.topup_approval` | boolean | 自助充值需要批准，支持待批准用户字段和 `/users/:id/topup/approve`；用户能力 API 也声明此字段。 |
 | `capabilities.access_groups` | boolean | 是否支持 `/channel-groups` 与 `/model-groups` 访问范围路由。 |
 | `capabilities.channel_group_credential_candidates` | boolean | 添加凭证范围绑定时可读取轻量候选列表。 |
 | `capabilities.user_period_limits` | boolean | 是否支持用户周期限额配置字段，以及 `GET /users/:id/period-limits` 和 `POST /users/:id/period-limits/reset`。 |
@@ -3057,9 +2964,7 @@ Devin 使用 Connect-RPC JSON 调用 `https://server.codeium.com/exa.seat_manage
 
 当前被动采集从 CPA usage 事件的 `response_headers` 中提取受限 `quota_headers`。Home 只保留 Codex `X-Codex-*` 额度 Header allowlist，以及通过语法校验且不具有 secret 特征的 upstream request ID，并在 usage payload 入库前删除 raw `response_headers`。核心事务开始前，会并发地按 active auth UUID、runtime index、ID 依次解析上报的 `auth_index`，并把稳定 UUID、规范化 Provider/凭证类型身份与额度身份代次写入 usage 行；并发删除或身份变更会通过代次隔离该行与替换后的凭证，不会串行化 usage 入库。核心 usage/billing 事务提交后，Codex Header 观测才在隔离的额度事务中归一化并 upsert；非法额度元数据或额度持久化失败都不能回滚核心 usage 或 billing 写入。比 Home 接收时间超前五分钟以上的时间戳会归一化为接收时间。迟到事件不能覆盖更新快照，首次并发写入也遵守该规则。Codex Header 观测始终视为稀疏滚动更新：按稳定 limit 身份和周期合并，保留仍有效的旧窗口以及权威主动探测得到的元数据，不清除正在执行的 probe lease，不延后下一次主动探测，也不绕过失败重试退避。无前缀 Primary/Secondary 窗口仅在 `X-Codex-Active-Limit` 提供合法 limit 身份时摄取：`codex` 与 `premium` 映射到默认 account family，`codex_bengalfox` 映射到 Spark model family，其他合法身份保持为彼此隔离的 model family。active-limit 缺失或非法时只忽略无前缀窗口，明确分组的窗口仍可使用。同一 active family 也出现在明确分组中时，身份与周期相同的窗口合并为一项：额度值以无前缀观测为准，label 可由明确分组补充。同一 limit 周期重复出现的 Primary/Secondary 观测也会合并为一个窗口；已过期窗口不会参与新快照状态汇总。
 
-
-Home 同时为 Claude、Antigravity、Codex、Devin、Kimi、xAI、Meta 的 OAuth/file credential 运行固定目标主动 collector。Codex 读取官方 usage endpoint，使用 `metered_feature` 作为 additional limit 的稳定身份，并推导规范化套餐元数据。无论 usage 汇总是否包含 `rate_limit_reset_credits`，collector 都会独立查询 reset-credit 详情 endpoint。详情请求失败且 usage 汇总报告了正数当前次数时，collection 返回 `partial`，保存本次最新次数和空详情列表，不再沿用旧数量或已过期 credit；两个 endpoint 都没有提供可靠 reset-credit 信息时，会清除旧 reset-credit 数据，但不影响仍然可用的额度窗口。Codex `primary_windows` 会分别保留默认 account family 与 `codex_bengalfox` family 的一个代表窗口，并在每个 family 内优先最长周期（通常为 weekly），因此默认 5 小时窗口或 code-review limit 不会挤掉 Spark。使用位置型 `*-primary`/`*-secondary` ID 的 Codex v1 旧快照会在下一次满足活动门控的定时扫描中触发立即 v2 主动重采集，即使 freshness 或 `next_probe_at` 原本会推迟采集；升级尝试会在发起请求前记录，失败后恢复正常 retry backoff，不会持续绕过退避。旧 raw windows 仍保留用于诊断，但成功升级前 API 表现为 `unknown`/`stale`，升级失败后表现为 `error`/`stale`；v2 成功后原子替换旧 ID，后续被动 Header 观测也不能降低快照版本。Management API 通过下方独立 POST 路由提供 reset credit 消费操作。Claude 查询 usage 和 profile，额度成功但 profile 元数据失败时返回 `partial`。Antigravity 携带 credential `project_id` 请求分组额度汇总 endpoint，只将 `gemini-5h`、`gemini-weekly`、`3p-5h` 和 `3p-weekly` 映射到稳定的 `gemini` 与 `third-party` model scope，并请求 `loadCodeAssist`（`{"metadata":{"ideType":"ANTIGRAVITY"}}`）推导订阅套餐元数据（优先读取 `paidTier`，其次回退 `currentTier`，将 `g1-ultra-tier`、`g1-ultra-lite-tier`、`g1-pro-tier`、`free-tier` 分别映射为 `Ultra`、`Ultra Lite`、`Pro`、`Free`；订阅读取失败或畸形时标记为 `partial` 并保留最后已知套餐）。数字、数字字符串和百分数字符串形式的比例都可解析；disabled、未知或畸形 bucket 会被逐项忽略。只有两个 weekly bucket 都有效时，响应才可以替换最后已知快照；两个 5 小时 bucket 分别可选，不要求成对出现。`primary_windows` 每个稳定 scope 保留一个窗口，并在存在时优先该 scope 的 5 小时窗口。使用旧模型 ID 的 Antigravity v1 快照会在下一次满足活动门控的定时扫描中触发立即主动重采集；升级期间 API 返回 `unknown`/`stale`，失败后返回 `error`/`stale` 并遵循正常 retry backoff，成功后原子替换旧模型窗口。Kimi 查询 coding usage，保留账号 usage 汇总和每个 limit 窗口，并兼容数字或字符串形式的数值字段。Kimi 的 Provider limit 优先进入 `primary_windows`，避免聚合 summary 挤掉周限额或 duration 限额。无法使用这些 OAuth collector 的 Provider API-key credential 返回 `unsupported`。
-
+Home 同时为 Claude、Antigravity、Codex、Devin、Kimi、xAI、Meta 的 OAuth/file credential 运行固定目标主动 collector。Codex 读取官方 usage endpoint，使用 `metered_feature` 作为 additional limit 的稳定身份，并推导规范化套餐元数据。无论 usage 汇总是否包含 `rate_limit_reset_credits`，collector 都会独立查询 reset-credit 详情 endpoint。详情请求失败且 usage 汇总报告了正数当前次数时，collection 返回 `partial`，保存本次最新次数和空详情列表，不再沿用旧数量或已过期 credit；两个 endpoint 都没有提供可靠 reset-credit 信息时，会清除旧 reset-credit 数据，但不影响仍然可用的额度窗口。Codex `primary_windows` 会分别保留默认 account family 与 `codex_bengalfox` family 的一个代表窗口，并在每个 family 内优先最长周期（通常为 weekly），因此默认 5 小时窗口或 code-review limit 不会挤掉 Spark。使用位置型 `*-primary`/`*-secondary` ID 的 Codex v1 旧快照会在下一次满足活动门控的定时扫描中触发立即 v2 主动重采集，即使 freshness 或 `next_probe_at` 原本会推迟采集；升级尝试会在发起请求前记录，失败后恢复正常 retry backoff，不会持续绕过退避。旧 raw windows 仍保留用于诊断，但成功升级前 API 表现为 `unknown`/`stale`，升级失败后表现为 `error`/`stale`；v2 成功后原子替换旧 ID，后续被动 Header 观测也不能降低快照版本。Management API 不提供消费 reset credit 的操作。Claude 查询 usage 和 profile，额度成功但 profile 元数据失败时返回 `partial`。Antigravity 携带 credential `project_id` 请求分组额度汇总 endpoint，只将 `gemini-5h`、`gemini-weekly`、`3p-5h` 和 `3p-weekly` 映射到稳定的 `gemini` 与 `third-party` model scope，并请求 `loadCodeAssist`（`{"metadata":{"ideType":"ANTIGRAVITY"}}`）推导订阅套餐元数据（优先读取 `paidTier`，其次回退 `currentTier`，将 `g1-ultra-tier`、`g1-ultra-lite-tier`、`g1-pro-tier`、`free-tier` 分别映射为 `Ultra`、`Ultra Lite`、`Pro`、`Free`；订阅读取失败或畸形时标记为 `partial` 并保留最后已知套餐）。数字、数字字符串和百分数字符串形式的比例都可解析；disabled、未知或畸形 bucket 会被逐项忽略。只有两个 weekly bucket 都有效时，响应才可以替换最后已知快照；两个 5 小时 bucket 分别可选，不要求成对出现。`primary_windows` 每个稳定 scope 保留一个窗口，并在存在时优先该 scope 的 5 小时窗口。使用旧模型 ID 的 Antigravity v1 快照会在下一次满足活动门控的定时扫描中触发立即主动重采集；升级期间 API 返回 `unknown`/`stale`，失败后返回 `error`/`stale` 并遵循正常 retry backoff，成功后原子替换旧模型窗口。Kimi 查询 coding usage，保留账号 usage 汇总和每个 limit 窗口，并兼容数字或字符串形式的数值字段。Kimi 的 Provider limit 优先进入 `primary_windows`，避免聚合 summary 挤掉周限额或 duration 限额。无法使用这些 OAuth collector 的 Provider API-key credential 返回 `unsupported`。
 
 xAI 在单次探测超时内并行查询三个固定 Grok CLI endpoint：billing、其 `format=credits` 变体以及 `/v1/user?include=subscription`。所有请求携带 CLI token-auth、Grok CLI `1.0.70` client-version、一致的 pager/shell User-Agent 和可选 user-ID Header。支持 camelCase/snake_case 账单字段，以及 `{ "val": ... }`、数字或字符串 cents。
 
@@ -3070,7 +2975,7 @@ xAI 在单次探测超时内并行查询三个固定 Grok CLI endpoint：billing
 - 任一组件查询失败或数据不完整时，保留其他可用数值并返回 `partial`。至少一个组件提供有效数值时，月度／按量付费与周额度／产品明细两组分别替换：失败组保留仍有效的旧窗口、原数值、采集时间及有效期，未知新数值不能覆盖仍有效的旧数值。成功组可以清除已关闭的上限或已移除的条目；已确认免费时清除周额度及产品明细。已过期保留窗口会被清理，后续完整响应正常替换旧值。完全没有有效用量数值的失败或不完整采集保留旧快照、套餐及采集时间，并遵循正常重试退避。客户端需升级、授权失败及限流错误优先于笼统的解析错误。部分成功和整次失败均遵守所有失败组件中最长的 `Retry-After`，不受展示哪条错误影响；它只延后定时采集，不延长额度有效期。后续采集成功时清除错误及失败计数。已确认免费且额度为空的成功快照按上述规则替换旧值。
 - 低于 v3 的 xAI 快照在下一次满足活动门控的定时扫描中触发重采集，即使旧快照仍在有效期内。升级尝试在请求前记录，失败后遵循正常退避；成功时原子替换旧额度。
 
-collector 直接读取 DB 凭证，不接受管理面板提交 URL。携带凭证的额度请求仅跟随原 scheme、host 及有效端口相同的重定向；跨源重定向及 HTTPS 降级会在转发请求前被拒绝。探测前会重新解析最新 DB 凭证，并直接使用其中当前保存的 access token，不会调用 OAuth 刷新；凭证刷新仍由独立的 runtime 刷新子系统负责。全局代理使用热更新后的当前配置，凭证级代理仍优先。统一使用 20 秒 timeout、PostgreSQL 下每个 Provider 并发上限 3（SQLite 下全局为 1）、单凭证 DB 租约，以及从 5 分钟开始、带凭证级 jitter、约 1 小时封顶的指数退避；`Retry-After` 可延后下次尝试。禁用凭证以及因 OAuth 刷新失败而被阻断调度的凭证不会被主动探测；模型执行 cooldown 不会阻止额度采集，额度采集自身的重试退避（`next_probe_at`）会推迟定时扫描但不会阻断人工强制重采集。冷却过期或刷新阻断解除后，持久化的 unavailable/error 状态不再永久阻止恢复探测。成功快照默认 30 分钟有效。探测失败时保留最后已知窗口，只写结构化脱敏错误。
+collector 直接读取 DB 凭证，不接受 HMC 提交 URL。携带凭证的额度请求仅跟随原 scheme、host 及有效端口相同的重定向；跨源重定向及 HTTPS 降级会在转发请求前被拒绝。探测前会重新解析最新 DB 凭证，并直接使用其中当前保存的 access token，不会调用 OAuth 刷新；凭证刷新仍由独立的 runtime 刷新子系统负责。全局代理使用热更新后的当前配置，凭证级代理仍优先。统一使用 20 秒 timeout、PostgreSQL 下每个 Provider 并发上限 3（SQLite 下全局为 1）、单凭证 DB 租约，以及从 5 分钟开始、带凭证级 jitter、约 1 小时封顶的指数退避；`Retry-After` 可延后下次尝试。禁用凭证以及因 OAuth 刷新失败而被阻断调度的凭证不会被主动探测；模型执行 cooldown 不会阻止额度采集，额度采集自身的重试退避（`next_probe_at`）会推迟定时扫描但不会阻断人工强制重采集。冷却过期或刷新阻断解除后，持久化的 unavailable/error 状态不再永久阻止恢复探测。成功快照默认 30 分钟有效。探测失败时保留最后已知窗口，只写结构化脱敏错误。
 
 凭证核心字段：
 
@@ -3228,21 +3133,15 @@ collector 直接读取 DB 凭证，不接受管理面板提交 URL。携带凭�
 
 Claude 的套餐信息来自 `/api/oauth/profile`；资料请求失败或未识别出套餐时，保留上次已知套餐。重置次数通过独立的 `GET /api/oauth/usage?cedar_ember=1&skip_spend=1` 读取。账号符合资格且 grant 列表有效时，`reset_credits.available_count` 汇总已开始、未过期且未暂停的 grant 剩余重置次数。它表示剩余次数，不代表当前使用量下可以立即执行重置。Claude 的 grant 可包含多次重置，不等同于 Codex 的单次 credit，因此 `credits` 数组为空。上游未报告或账号不符合资格时返回 `reset_credits: null`；重置请求失败或数据格式无效时，清除旧的重置观测并将采集状态标记为 `partial`，保留成功采集的窗口和套餐信息。Home 仅查询这些信息，不会消费重置 grant。
 
-Provider 未报告该能力或没有可靠观测时，`reset_credits` 为 `null`。该字段只在详情响应中提供，不包含在 `GET /quota/credentials` 列表项里。`available_count` 是 Provider 最近一次报告的当前可用次数，`observed_at` 是该次 reset-credit 观测时间，`credits` 是经过数量限制并按过期时间排序的当前可用 Codex rate-limit reset credit 列表。usage 汇总提供正数次数、但独立详情请求失败时，`available_count` 保持本次最新值，`credits` 为空且 `collection_status=partial`；旧数量和已过期详情不会继续表现为当前数据。credit 条目只暴露状态和时间元数据，不返回 Provider 的 reset-credit 标识。该 endpoint 只读，不会消费 reset credit；独立 POST 路由会先读取实时 credit。
+Provider 未报告该能力或没有可靠观测时，`reset_credits` 为 `null`。该字段只在详情响应中提供，不包含在 `GET /quota/credentials` 列表项里。`available_count` 是 Provider 最近一次报告的当前可用次数，`observed_at` 是该次 reset-credit 观测时间，`credits` 是经过数量限制并按过期时间排序的当前可用 Codex rate-limit reset credit 列表。usage 汇总提供正数次数、但独立详情请求失败时，`available_count` 保持本次最新值，`credits` 为空且 `collection_status=partial`；旧数量和已过期详情不会继续表现为当前数据。credit 条目只暴露状态和时间元数据，不返回 Provider 的 reset-credit 标识。该 endpoint 只读，不会消费 reset credit。
 
 定时额度 collector 每 1 分钟扫描一次。只有 Home 在最近 30 分钟内收到过该凭证的 usage，且这批 usage 晚于上次主动探测已消费的活动水位时，才会主动探测该凭证；恰好 30 分钟未使用视为不活跃。Home 使用精确接收时间记录活动。claim lease 时只捕获具备资格的活动水位，不立即消费；只有成功或失败的探测结果完成入库后才消费该水位，因此其他 Home 可以接管已放弃且过期的 lease，探测期间收到的新 usage 也会继续保持待处理。新的 usage 不会绕过 snapshot freshness、`next_probe_at`、已有 DB lease 或额度 retry backoff，只会让凭证在其他调度条件到期后具备下一次定时探测资格。活动水位属于内部 runtime 状态，不通过这些 API 暴露。
 
 usage 活动归属于通过 `auth_index` 解析出的当前 DB 凭证，因此委托 executor 上报的 Provider 不会阻止定时采集；Provider 专用的被动观测仍要求上报 Provider 与凭证 Provider 一致。定时扫描发现已过期的 `collecting` lease 且没有可恢复的近期活动水位时，会清除 lease 并把采集状态恢复为 `idle`，不会再次请求上游。
 
-### POST `/quota/credentials/:credential_id/reset-credits/consume`
-
-消耗一个实时可用、未过期的 Codex OAuth rate-limit reset credit。需要 Management 鉴权及 JSON `{ "idempotency_key": "stable-caller-generated-id" }`（非空，最长 256 字符）。只有确实需要再次消费时才使用新 key。Home 将该 key 作为 `redeem_request_id`，先通过实时 `GET /backend-api/wham/rate-limit-reset-credits` 选择最早过期的可用 credit，再向 `POST /backend-api/wham/rate-limit-reset-credits/consume` 发送选中的 `credit_id`。使用 OAuth bearer、可用时的 account ID、Codex 身份 Header，以及额度采集器的代理与超时配置；不会返回 Provider credit ID 或 token。
-
-仅识别上游结果 `reset`、`alreadyRedeemed` 时返回 `200` `{ "outcome": "reset" }` 或 `{ "outcome": "alreadyRedeemed" }`。`409` 包括 `NO_CREDIT`、`NOTHING_TO_RESET`、`RESET_REQUEST_ALREADY_SUBMITTED`。key 一旦为 POST 预留，即使超时、进程重启或结果不明确，再次使用仍返回冲突；Home 不重试不确定的 POST。使用新 key 可能消耗另一个 credit。未知上游响应返回 `502 UNKNOWN_RESET_CREDIT_RESPONSE`；其他上游或网络错误按失败处理。仅支持 Codex OAuth credential（否则 `400 CODEX_OAUTH_REQUIRED`）。成功消费不会同步刷新持久化额度快照；必要时可调用 `POST /quota/collect`。
-
 ### POST `/quota/collect`
 
-启动一轮异步按需额度采集，返回进入本地 collector 队列的凭证数量。与独立的 Codex reset-credit 消费 POST 路由一样，该端点不是只读接口。按需任务与定时采集共享进程级 Provider 并发限制；同一凭证在本地排队或执行期间会去重。
+启动一轮异步按需额度采集，返回进入本地 collector 队列的凭证数量。这是唯一非只读的额度端点。按需任务与定时采集共享进程级 Provider 并发限制；同一凭证在本地排队或执行期间会去重。
 
 请求体(所有字段可选;空 body 采集全部符合条件的凭证):
 
@@ -3525,7 +3424,7 @@ Query 参数：
 | `include_logs` | boolean | `false` | 找到本地 request log 时返回最多 20 行脱敏日志片段。 |
 | `include_related` | boolean | `false` | 兼容参数；事件对象始终包含 `related`。 |
 
-响应包含 `event`、`payload_summary` 和 `log_excerpt`。`event` 与列表项同形；`payload_summary.body_preview` 当前固定为 `null`，避免暴露 request body。日志片段只读取本地文件；远端日志应通过 `related.request_log.download_url` 下载。`log_excerpt` 最多读取日志文件前 64 KiB，最多返回 20 行非空的脱敏内容，每行超过 500 字符时会被截断并追加 `… [truncated N chars]` 后缀。
+响应包含 `event`、`payload_summary` 和 `log_excerpt`。`event` 与列表项同形；`payload_summary.body_preview` 当前固定为 `null`，避免暴露 request body。日志片段只读取本地文件；远端日志应通过 `related.request_log.download_url` 下载。
 
 ### GET `/request-events/export`
 
@@ -3727,8 +3626,6 @@ Query 参数：
 可用模型在 v8 响应中额外包含 `billing_models`，元素为 `{"provider": "z-ai", "model": "glm-5.3-flash"}`。这些计价身份按凭证使用实际调度解析器生成，去重后按供应商和模型排序。公开 `id`（例如 `team/MY-MODEL`）可能对应多个上游模型，同一供应商下也可能存在多个映射。模型价格编辑器应使用这些组合，不能把公开别名或合并后的 `name` 当作计价模型。空数组表示未解析到可靠身份，不应回退猜测。静态模型和旧版响应不含该字段，可继续使用原有 `(providers[], id)` 候选。此元数据不会修改已有价格规则或历史账单。
 
 从当前 runtime registry 或静态模型目录返回模型定义。
-
-已确认退役的模型不会进入静态定义或凭证注册，因此也不会出现在用户模型目录中。目录条目可设置 `lifecycle_status`（`retired`、`removed`、`unavailable` 会排除该条目）或 `retirement_date`（UTC，`YYYY-MM-DD`）。仅标记 `deprecated` 不会隐藏仍可调用的模型；缺失或无效日期保持向后兼容。Home 还会对 `claude` provider 应用已核实的 Anthropic 退役日期，包括 Claude 3.5 Haiku；不会将这些日期应用于提供同名模型的其他 provider。过滤在读取定义或注册/刷新凭证时执行，不会逐一探测所有 provider API，也不会将限流、认证失败或临时故障视为退役。
 
 每个模型都包含 `providers`，其值是 `usage.provider` 和 Billing 模型价格规则使用的权威
 provider 标识。客户端必须按每个 `(provider, model)` 组合生成一个候选项，不能从 `type`、
@@ -4303,10 +4200,9 @@ Query 参数：
 | `server.trusted-proxies` | array of string | 允许提供转发客户端地址的明确反向代理 IP/CIDR 列表；空列表表示全部不信任，trust-all 网段会被拒绝，修改后需重启。 |
 | `management.allow-remote` | boolean | 为 `true` 时允许非 localhost Management API 请求。 |
 | `management.secret-key` | string | Management key；本地配置模式下明文会在启动时 hash。 |
-| `management.disable-control-panel` | boolean | 禁用内嵌 panel routes：`/`、`/index.html`、`/admin`、`/admin/*`、`/app`、`/app/*`、`/assets/*` 以及旧版 HTML 别名。 |
+| `management.disable-control-panel` | boolean | 禁用内嵌 panel routes：`/`、`/index.html`、`/management.html`、`/user.html`、`/assets/*`。 |
 | `management.disable-auto-update-panel` | boolean | 兼容旧配置的字段；内嵌 panel assets 不会在运行时更新。 |
 | `management.panel-github-repository` | string | 兼容旧配置的内嵌 panel 源仓库字段。 |
-| `user-panel.cpa-public-url` | string | 可选的绝对 HTTP/HTTPS CPA 公开 URL，不允许包含凭据；展示时去除首尾空白。存储于 DB config，仅为 Home 展示元数据；非空时由 `GET /user/capabilities` 返回 `server_info.cpa_public_url`。不会控制监听器、集群或下游 CPA 运行配置。可通过 `PUT /v8/management/config/user-panel/cpa-public-url` 写入 JSON 字符串，或写入根级 `user-panel` 对象；空字符串清除展示元数据。 |
 | `user-email.enabled` | boolean | 邮件配置全部有效时启用已验证邮箱注册与密码找回。 |
 | `user-email.public-user-url` | string | verify/reset 链接使用的绝对公开用户面板 URL；生产环境要求 HTTPS。 |
 | `user-email.from-address` | string | 不带 display name 的 SMTP envelope/header 邮箱。 |
@@ -4644,7 +4540,7 @@ Payload 嵌套结构：
 | `meta-api-key` | `api-keys.meta` |
 | `openai-compatibility` | `api-keys.openai-compatibility` |
 
-`plugins`、`user-email`、`user-panel`、`routing` 下的规范 session-affinity 设置，以及 `quota-exceeded.switch-project` / `switch-preview-model` 保留原名。`quota-exceeded.antigravity-credits` 移入 Antigravity OAuth provider 子树。上游数组变为 `api-keys.<provider>` 分组列表，兼容 provider 的 `api-key-entries` 改为 `keys`。客户端 key 字符串列表从旧 `api-keys` 数组移到 `access.api-keys`，替换它仍会协调运行时 key 表；完整 key 记录使用 `/access/api-keys` 资源接口。
+`plugins`、`user-email`、`routing` 下的规范 session-affinity 设置，以及 `quota-exceeded.switch-project` / `switch-preview-model` 保留原名。`quota-exceeded.antigravity-credits` 移入 Antigravity OAuth provider 子树。上游数组变为 `api-keys.<provider>` 分组列表，兼容 provider 的 `api-key-entries` 改为 `keys`。客户端 key 字符串列表从旧 `api-keys` 数组移到 `access.api-keys`，替换它仍会协调运行时 key 表；完整 key 记录使用 `/access/api-keys` 资源接口。
 
 启动/导入解析接受旧布局和混合布局。同一字段同时出现新旧值时，显式 v8 字段优先，包括 `false`、`0` 和空集合。旧 V8 provider/client 路径和请求体作为别名接受，写入使用规范布局，未知字段仍拒绝。执行子树 PATCH/PUT 或完整替换时，保留只读 revision 和凭证 ID。
 

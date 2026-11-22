@@ -40,6 +40,8 @@ func (h *Handler) GetCapabilities(c *gin.Context) {
 			"analytics":     true,
 			// Playground conversations are stored server-side per user.
 			"chat_history": true,
+			// Organization workspaces under /user/organizations.
+			"organizations": true,
 		},
 		"server_info": serverInfo,
 	})

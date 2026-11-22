@@ -1,0 +1,1586 @@
+# AI48Home User API 文档
+
+本文档描述 AI48Home 当前 DB-backed User API。User API 与 Management API 分离，不使用 Management API secret key。
+
+v8 升级将 [Management API](../management/api_CN.md) 更新为 `/v8/management`；User API 仍使用 `/user`，认证和资源路径保持不变。`/user/api-keys` 管理已登录用户的客户端访问密钥；上游 provider 分组由管理接口 `/config/api-keys` 管理，管理员访问密钥操作使用相对于管理基础路径的 `/access/api-keys`。
+
+基础路径：
+
+```text
+http://<host>:<port>/user
+```
+
+浏览器用户工作区入口为 `/app`，登录页面为 `/app/login`。这些 UI 路由与 `/user` API 基础路径不同。
+
+Home 示例端口通常为 `8327`。显式 `-addr` 优先；未指定时，Home 使用 `cluster.yaml` 中的 `node.port`。v8 runtime config 的 `server.port` 仅下发给 CPA 节点，不参与 Home 监听端口配置。
+
+## Runtime 模型
+
+用户记录、可选邮箱状态、一次性安全 token、邮件任务、API key、TOTP 配置和 passkey entries 存储在 database-backed cluster repository 中。`/user/*` route group 只会在 Home 使用 database-backed runtime route set 时注册。
+
+通过 User API 修改 API key 会更新 Home dispatch 使用的同一张 `api_key` 表，并发布 config refresh event。
+
+## 用户邮箱配置
+
+邮箱验证与密码找回是可选能力，默认关闭。只有配置完整且可用时，`GET /capabilities` 返回的三个 capability flag 才会启用。
+
+```yaml
+user-email:
+  enabled: true
+  public-user-url: "https://home.example.com/app"
+  from-address: "no-reply@example.com"
+  from-name: "AI48Home"
+  sender:
+    type: "smtp"
+    smtp:
+      host: "smtp.example.com"
+      port: 587
+      username: "smtp-user"
+      password-env: "HOME_USER_EMAIL_SMTP_PASSWORD"
+      starttls: true
+  verification-token-ttl: "24h"
+  reset-token-ttl: "30m"
+```
+
+配置规则：
+
+- `public-user-url` 必须是绝对 HTTPS URL；只有 `localhost` 或回环 IP 可以使用明文 HTTP。
+- `from-address` 必须是单个邮箱地址，不能带 display name。
+- 首个 sender 实现为 SMTP。所有非回环 SMTP host 都必须配置 `starttls: true`；Home 要求 TLS 1.2 或更高版本，暂不支持 465 端口的 implicit TLS。配置 `username` 时，`password-env` 必须指向非空环境变量；密码不会写入 `config.yaml`。
+- `verification-token-ttl` 与 `reset-token-ttl` 必须是正数 Go duration 字符串。
+- 配置缺失或无效时，邮箱 capability 保持关闭，但不会阻止 Home 启动。
+- `user-email` 只属于 Home，不会下发到 CPA 节点。
+- Home 默认忽略转发的客户端 IP header。若 Home 前面有明确的反向代理，只在 v8 `server.trusted-proxies`（旧 `trusted-proxies`）中填写该 Nginx/Caddy/负载均衡器的精确 IP 或 CIDR；系统拒绝 trust-all 网段，修改后需要重启。这样既能让注册与找回限流识别真实来源，又不会允许直连客户端伪造地址。
+- 关闭功能会保留数据库中的邮箱状态，但停止新的邮箱修改、验证请求和找回请求。此前签发的 verify/reset token 在过期或被撤销前仍可消费。
+
+## 认证
+
+公开 routes：
+
+| Method | Path | 说明 |
+| --- | --- | --- |
+| `GET` | `/capabilities` | 返回可选 User API capability。 |
+| `GET` | `/models` | 返回公开模型目录。 |
+| `POST` | `/register` | 创建待审批用户；返回 HTTP 202，不签发 bearer token。 |
+| `POST` | `/login` | 用户未启用 passkey 和 TOTP 时的密码登录。 |
+| `POST` | `/login/totp` | 用户启用 TOTP 时的密码 + TOTP 登录。 |
+| `POST` | `/login/passkey` | Passkey 登录。 |
+| `POST` | `/email/verify` | 消费邮箱验证 token。 |
+| `POST` | `/password/forgot` | 接收通用密码找回请求。 |
+| `POST` | `/password/reset` | 消费重置 token 并设置新密码。 |
+
+Passkey 登录 begin/options 也属于公开接口。受保护的 `/user/*` route 需要登录成功后返回的 bearer token。
+
+公开注册的用户必须先由管理员调用 `POST /v8/management/users/:id/approve` 批准。在此之前，密码/TOTP 登录、passkey 登录 begin/finish 和 bearer session 认证（包括 `/me`）均返回 HTTP 403：`{"error":"approval_pending","message":"Your account is awaiting administrator approval."}`。邮箱验证和密码重置不会清除待审批状态，也不会签发 session。现有用户和管理员创建的用户保持可用。
+Bearer token 是使用集群根 CA 私钥签名、并使用集群根 CA 公钥验证的 RS256 JWT。替换集群根 CA 后，之前签发的 User API token 会失效。
+Bearer token 还包含用户当前 session version。密码修改、密码重置或 Management API 管理员更新密码成功后都会递增该版本，使旧 bearer token 失效。已认证修改密码会为当前客户端返回替换 session；密码重置不会自动登录。
+密码会按照原始输入值进行 hash 和校验，不会去除首尾空白字符。新 bcrypt 密码最多为 72 个 UTF-8 字节。
+User API JSON 请求体最大为 1 MiB。
+
+支持的请求头：
+
+| Header | Value |
+| --- | --- |
+| `Authorization` | `Bearer <USER_TOKEN>` |
+
+登录优先级：
+
+| 状态 | 行为 |
+| --- | --- |
+| 已启用 passkey 且已启用 TOTP | 普通密码登录返回 `401 passkey_required`；`/login/passkey` 和 `/login/totp` 都可登录。 |
+| 已启用 passkey 但未启用 TOTP | 普通密码登录返回 `401 passkey_required`；使用 `/login/passkey`。 |
+| 未启用 passkey 但已启用 TOTP | 普通密码登录返回 `401 totp_required`；使用 `/login/totp`。 |
+| 未启用 passkey 且未启用 TOTP | 普通密码登录返回 bearer token。 |
+
+Home User API 会额外写入以下响应头：
+
+| Header | 说明 |
+| --- | --- |
+| `x-cpa-home-version` | Home 构建版本。 |
+| `x-cpa-home-commit` | Home 构建 commit。 |
+| `x-cpa-home-build-date` | Home 构建日期。 |
+
+## 通用响应
+
+多数删除或简单写入接口成功时返回：
+
+```json
+{ "status": "ok" }
+```
+
+登录成功时返回：
+
+```json
+{
+  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "expires_at": "2026-06-02T10:00:00Z",
+  "user": {
+    "id": 1,
+    "username": "alice",
+    "credits": 0,
+    "totp_enabled": false,
+    "passkey_count": 0,
+    "email_status": {
+      "configured": true,
+      "verified": false,
+      "masked": "a***@example.com",
+      "recovery_ready": false
+    },
+    "created_at": "2026-06-02T10:00:00Z",
+    "updated_at": "2026-06-02T10:00:00Z"
+  }
+}
+```
+
+User API handler 通常同时返回机器可读 `error` 和可读 `message`：
+
+```json
+{ "error": "invalid_credentials", "message": "invalid credentials" }
+```
+
+校验与认证失败会保留具体且安全的提示；服务端 `5xx` 错误仍保留机器可读 code，但统一使用 `internal server error`，避免向公网暴露数据库或实现细节。
+
+常见错误：
+
+```json
+{ "error": "bearer_token_required", "message": "bearer token is required" }
+{ "error": "invalid_token", "message": "invalid token" }
+{ "error": "passkey_required", "message": "passkey is required" }
+{ "error": "totp_required", "message": "totp code is required" }
+{ "error": "invalid_body", "message": "username is required" }
+```
+
+## 已注册 Routes
+
+以下清单来自 `internal/userapi/handler.go` 注册的 User API route group。
+
+| Method | Path |
+| --- | --- |
+| `GET` | `/capabilities` |
+| `GET` | `/models` |
+| `GET` | `/models/accessible` |
+| `POST` | `/register` |
+| `POST` | `/login` |
+| `POST` | `/login/passkey/begin` |
+| `POST` | `/login/passkey/options` |
+| `POST` | `/login/totp` |
+| `POST` | `/login/passkey` |
+| `GET` | `/me` |
+| `PATCH` | `/me` |
+| `PATCH` | `/password` |
+| `POST` | `/password` |
+| `POST` | `/password/forgot` |
+| `POST` | `/password/reset` |
+| `PUT` | `/email` |
+| `DELETE` | `/email` |
+| `POST` | `/email/verification` |
+| `POST` | `/email/verify` |
+| `GET` | `/totp` |
+| `POST` | `/totp` |
+| `POST` | `/totp/show` |
+| `POST` | `/totp/bind` |
+| `DELETE` | `/totp` |
+| `GET` | `/billing/overview` |
+| `GET` | `/billing/charges` |
+| `GET` | `/billing/balance-records` |
+| `POST` | `/billing/recharge` |
+| `GET` | `/chat/conversations` |
+| `DELETE` | `/chat/conversations` |
+| `GET` | `/chat/conversations/:id` |
+| `PUT` | `/chat/conversations/:id` |
+| `DELETE` | `/chat/conversations/:id` |
+| `GET` | `/api-keys` |
+| `POST` | `/api-keys` |
+| `POST` | `/api-key` |
+| `PATCH` | `/api-keys` |
+| `PATCH` | `/api-key` |
+| `PATCH` | `/api-keys/:id` |
+| `PATCH` | `/api-key/:id` |
+| `DELETE` | `/api-keys` |
+| `DELETE` | `/api-key` |
+| `DELETE` | `/api-keys/:id` |
+| `DELETE` | `/api-key/:id` |
+| `GET` | `/organizations` |
+| `GET` | `/organizations/:org_id` |
+| `GET` | `/organizations/:org_id/members` |
+| `POST` | `/organizations/:org_id/members` |
+| `PATCH` | `/organizations/:org_id/members/:user_id` |
+| `DELETE` | `/organizations/:org_id/members/:user_id` |
+| `GET` | `/organizations/:org_id/api-keys` |
+| `POST` | `/organizations/:org_id/api-keys` |
+| `PATCH` | `/organizations/:org_id/api-keys/:key_id` |
+| `DELETE` | `/organizations/:org_id/api-keys/:key_id` |
+| `GET` | `/organizations/:org_id/billing/charges` |
+| `GET` | `/organizations/:org_id/billing/balance-records` |
+| `POST` | `/organizations/:org_id/billing/recharge` |
+| `GET` | `/organizations/:org_id/billing/recharge-request` |
+| `GET` | `/organizations/:org_id/analytics` |
+| `GET` | `/organizations/:org_id/request-logs` |
+| `POST` | `/passkeys/begin` |
+| `POST` | `/passkey/begin` |
+| `POST` | `/passkeys/options` |
+| `POST` | `/passkey/options` |
+| `POST` | `/passkeys` |
+| `POST` | `/passkey` |
+| `DELETE` | `/passkeys` |
+| `DELETE` | `/passkey` |
+| `DELETE` | `/passkeys/:id` |
+| `DELETE` | `/passkey/:id` |
+
+## 账号
+
+### GET `/capabilities`
+
+返回当前 Home 配置是否支持可选邮箱注册、邮箱验证与密码找回。该 route 不暴露 SMTP 配置或用户数据。
+
+响应示例：
+
+```json
+{
+  "capabilities": {
+    "email_registration": true,
+    "email_verification": true,
+    "password_recovery": true,
+    "profile_edit": true,
+    "model_catalog": true,
+    "request_logs": true,
+    "chat_history": true
+  },
+  "server_info": {
+    "home_version": "v1.2.3",
+    "home_commit": "abcdef0",
+    "home_build_date": "2026-07-20",
+    "cpa_public_url": "https://cpa.example.com/v1"
+  }
+}
+```
+
+`server_info.cpa_public_url` 为可选字符串；`user-panel.cpa-public-url` 为空或未设置时省略该字段。请在 DB config 中配置（例如通过 `PUT /v8/management/config/user-panel/cpa-public-url` 写入 JSON 字符串）。旧布局与 v8 布局均保留根级 `user-panel`：
+
+```yaml
+user-panel:
+  cpa-public-url: "https://cpa.example.com/v1"
+```
+
+非空值必须为不含凭据的绝对 HTTP/HTTPS URL；展示时去除首尾空白。这仅是用于展示的公开元数据，不是监听地址、集群设置或下游 CPA 运行配置，也不会下发到 CPA 节点。空字符串清除展示的 URL。`config.yaml` 仅用于导入导出，并非运行时配置来源。
+
+当 `user-email.enabled` 为 false，或邮件配置不完整/无效时，三个邮箱相关 flag 都为 `false`。旧版 Home 可能因没有该 route 而返回 `404`。
+
+在提供 `/user/models` 的 Home 版本上，`model_catalog` 恒为 `true`；旧版本不会返回该字段。客户端应读取该 flag 来决定是否展示模型目录，而不是直接调用目录 route 并把 `404` 当作故障处理。
+
+### POST `/register`
+
+创建用户账号，保存 bcrypt password hash，并返回 bearer token。
+
+示例请求：
+
+```json
+{
+  "username": "alice",
+  "password": "secret",
+  "email": "alice@example.com"
+}
+```
+
+字段：
+
+| Field | Type | Required | 说明 |
+| --- | --- | --- | --- |
+| `username` | string | yes | 用户名。Aliases: `user_name`, `user-name`。 |
+| `password` | string | yes | 用于生成存储密码 hash 的明文密码。 |
+| `email` | string | no | 可选邮箱。仅在 `email_registration` 为 true 时接受；会先归一化并以未验证状态保存，验证成功前不会占用唯一所有权。 |
+
+响应：HTTP **202 Accepted**，不包含 bearer token 或 session：
+
+```json
+{"approval_pending":true,"message":"Your account is awaiting administrator approval."}
+```
+
+账户持久化为 `approval_pending: true`，注册请求不能覆盖此标志。客户端应显示提示，而不是进入已登录工作区。管理员批准后，用户可正常登录。
+
+提供邮箱时，Home 会先执行验证投递限流，再尝试异步排队；地址已被拥有或请求已受限时仍接受注册，但不会发送邮件。注册成功不代表邮箱已验证或已可用于找回。
+
+所有注册尝试（包括不带邮箱的 username-only 注册）都会按来源 IP 和全局维度限流；验证邮件投递另有目标邮箱维度限制。被限制时返回 `429 registration_rate_limited` 与 `Retry-After`。
+
+常见错误：
+
+```json
+{ "error": "user_exists", "message": "user already exists" }
+{ "error": "email_feature_unavailable", "message": "email feature is unavailable" }
+{ "error": "invalid_email", "message": "email is invalid" }
+{ "error": "invalid_body", "message": "password is required" }
+{ "error": "invalid_password", "message": "password exceeds the 72-byte bcrypt limit" }
+{ "error": "request_too_large", "message": "request body exceeds 1048576 bytes" }
+{ "error": "registration_rate_limited", "message": "registration rate limit exceeded" }
+```
+
+### POST `/login`
+
+当用户未启用 passkey 且未启用 TOTP 时，使用用户名和密码登录。
+
+示例请求：
+
+```json
+{
+  "username": "alice",
+  "password": "secret"
+}
+```
+
+响应：登录响应结构。
+
+常见错误：
+
+```json
+{ "error": "invalid_credentials", "message": "invalid credentials" }
+{ "error": "passkey_required", "message": "passkey is required" }
+{ "error": "totp_required", "message": "totp code is required" }
+```
+
+### POST `/login/totp`
+
+使用用户名、密码和 TOTP code 登录。只要用户启用了 TOTP，即使同时有 passkey，也可以使用此 route 登录。仅启用 passkey 的用户调用此 route 会返回 `401 passkey_required`。
+
+示例请求：
+
+```json
+{
+  "username": "alice",
+  "password": "secret",
+  "totp_code": "123456"
+}
+```
+
+字段：
+
+| Field | Type | Required | 说明 |
+| --- | --- | --- | --- |
+| `username` | string | yes | 用户名。Aliases: `user_name`, `user-name`。 |
+| `password` | string | yes | 用户密码。 |
+| `totp_code` | string | yes | TOTP code。Aliases: `totp-code`, `totp`, `code`。 |
+
+响应：登录响应结构。
+
+常见错误：
+
+```json
+{ "error": "passkey_required", "message": "passkey is required" }
+{ "error": "totp_not_enabled", "message": "totp is not enabled" }
+{ "error": "invalid_totp", "message": "invalid totp code" }
+```
+
+### POST `/login/passkey`
+
+使用存储在 `user.passkey` 中的 passkey entry 登录。
+
+示例请求：
+
+```json
+{
+  "username": "alice",
+  "passkey_id": "pk_xxx",
+  "passkey_secret": "one-time-returned-secret"
+}
+```
+
+如果 passkey 是用 `credential` payload 创建的，此 route 也可以对比 opaque JSON `credential` 字段。
+
+字段：
+
+| Field | Type | Required | 说明 |
+| --- | --- | --- | --- |
+| `username` | string | yes | 用户名。Aliases: `user_name`, `user-name`。 |
+| `passkey_id` | string | yes | Passkey ID。Alias: `passkey-id`；也接受 `id`。 |
+| `passkey_secret` | string | conditionally | 创建 passkey 时返回的 secret。Alias: `secret`。 |
+| `credential` | object | conditionally | 未存储 secret hash 时用于精确比较的 opaque credential JSON。 |
+
+响应：登录响应结构。
+
+常见错误：
+
+```json
+{ "error": "invalid_passkey", "message": "invalid passkey" }
+{ "error": "invalid_body", "message": "username and passkey_id are required" }
+```
+
+### PATCH `/me`
+
+仅修改 bearer token 所属用户的 `username` 和/或 `timezone`。`GET /user/capabilities` 返回 `capabilities.profile_edit: true`；字段缺失或为 false 时，客户端应隐藏编辑功能。
+
+```http
+PATCH /user/me
+Authorization: Bearer user.jwt.token
+Content-Type: application/json
+```
+
+```json
+{ "username": "alice-new", "timezone": "America/New_York" }
+```
+
+必须至少提供一个字段，字段名严格区分大小写。值必须为去除首尾空白后非空的字符串。用户名沿用现有用户校验及有效用户名唯一性规则；时区使用 repository 的 Go `time.LoadLocation` 校验。未提供的字段保持不变，空时区不会重置为默认值。
+
+未知字段、别名、null、错误类型、空请求体、非对象、无效 JSON 或尾随 JSON 返回 `400 invalid_body`。禁止 `id`、`user_id`、credits、password、email、审批/session 状态、MFA/passkey、计费倍率及周期限额设置。无效时区返回 `400 invalid_timezone`，重复用户名返回 `409 user_exists`。失败请求不会修改用户，即使同时包含合法编辑。请求体上限仍为 1 MiB，超出返回 `413 request_too_large`。
+
+成功返回 HTTP 200，结构与 `GET /me` 相同：`{ "status": "ok", "user": ... }`，包含 `timezone`。仅修改当前 token 所属用户，不签发 token 或 cookie，不修改 session version；改名后已有 bearer session 仍有效。密码、邮箱/安全状态、余额和限额配置保持不变。时区变更影响依赖时区的周期窗口计算，但不更改配置限额。缺失、无效、过期或已撤销 session 返回 401，待审批用户返回 `403 approval_pending`。
+
+### GET `/me`
+
+根据 bearer token 返回当前认证用户的信息。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+示例响应：
+
+```json
+{
+  "status": "ok",
+  "user": {
+    "id": 1,
+    "username": "alice",
+    "credits": 0,
+    "totp_enabled": false,
+    "passkey_count": 1,
+    "email_status": {
+      "configured": true,
+      "verified": true,
+      "masked": "a***@example.com",
+      "recovery_ready": true
+    },
+    "passkeys": [
+      {
+        "id": "passkey-1",
+        "name": "MacBook Touch ID",
+        "created_at": "2026-06-02T10:05:00Z",
+        "updated_at": "2026-06-02T10:05:00Z"
+      }
+    ],
+    "created_at": "2026-06-02T10:00:00Z",
+    "updated_at": "2026-06-02T10:10:00Z"
+  }
+}
+```
+
+常见错误：
+
+```json
+{ "error": "bearer_token_required", "message": "bearer token is required" }
+{ "error": "invalid_token", "message": "invalid token" }
+```
+
+### POST/PATCH `/password`
+
+修改当前认证用户的密码。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+示例请求：
+
+```json
+{
+  "new_password": "new-secret"
+}
+```
+
+字段：
+
+| Field | Type | Required | 说明 |
+| --- | --- | --- | --- |
+| `new_password` | string | yes | 新明文密码。Alias: `new-password`。 |
+
+响应：登录响应结构，包含新的 `token` 与 `expires_at`。密码更新会递增用户 session version，因此本次请求使用的 bearer token 和其他所有旧 bearer token 都会失效；客户端必须原子替换为返回的新 session。
+
+TOTP 与 passkey 数据不会被修改。
+
+## 邮箱验证与密码找回
+
+邮箱是可选字段。Home 保存归一化后的小写地址，但 User API 响应只暴露 `email_status`：
+
+只有已验证邮箱才构成唯一所有权声明。多个 active account 可以暂时保存同一个未验证地址，因此匿名注册不能永久抢占他人的邮箱，注册/更新响应也不会泄露该地址是否已被其他账号拥有。若地址已由其他 active account 拥有，Home 仍返回正常 accepted 结果，但不会发送验证邮件。首个成功验证尚未被占用地址的账号会原子取得所有权；之后发生冲突的验证链接统一返回“无效或已过期”。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `configured` | boolean | 当前是否已保存邮箱。 |
+| `verified` | boolean | 当前 email version 是否已完成所有权验证。 |
+| `masked` | string | 例如 `a***@example.com` 的隐私安全展示值；未配置时为空。 |
+| `recovery_ready` | boolean | 邮箱已验证且当前邮件配置可用。 |
+
+修改邮箱会立即清除验证状态、递增 email version、撤销未完成的 verify/reset token，并将待处理邮件任务标记为 superseded。提交完全相同的归一化地址是幂等操作，不会清除验证状态。
+
+### PUT `/email`
+
+添加或替换当前认证用户的邮箱。需要 bearer token，并要求邮箱 capability 已启用。
+
+```json
+{ "email": "new@example.com" }
+```
+
+成功返回 `200` 和 `{ "status": "ok", "user": ... }`。返回用户中的新邮箱状态为未验证。该 route 只保存地址，不直接排队发送邮件；随后调用 `/email/verification`。
+
+常见错误：
+
+```json
+{ "error": "invalid_email", "message": "email is invalid" }
+{ "error": "email_feature_unavailable", "message": "email feature is unavailable" }
+{ "error": "email_update_rate_limited", "message": "email update rate limit exceeded" }
+```
+
+### DELETE `/email`
+
+删除当前认证用户保存的邮箱。即使邮箱 capability 已关闭，该 route 仍保持可用，确保用户始终可以删除可选个人信息。删除邮箱会递增 email version、撤销未完成的 verify/reset token、将待处理邮件任务标记为 superseded，并释放该地址供其他 active user 使用。
+
+成功返回 `200 { "status": "ok", "user": ... }`。未配置邮箱时重复调用是幂等操作。
+
+### POST `/email/verification`
+
+为当前认证用户的未验证邮箱排队发送验证邮件。无需请求体。
+
+成功：
+
+```http
+HTTP/1.1 202 Accepted
+```
+
+```json
+{ "status": "accepted" }
+```
+
+邮箱已经验证时，幂等返回 `200 { "status": "ok" }`。注册时的首次验证邮件与手动重发共用同一组限流：严格 60 秒冷却，并同时按 user、目标邮箱、来源 IP 和全局维度限制。手动重发被限制时返回 `429 verification_rate_limited`，`Retry-After` 为实际剩余秒数。
+
+```json
+{ "error": "email_not_configured", "message": "email is not configured" }
+{ "error": "verification_rate_limited", "message": "verification request rate limit exceeded" }
+```
+
+### POST `/email/verify`
+
+消费短时、单次使用的邮箱验证 token。邮件中的 UI 链接应先展示明确确认页面，只有用户确认后才调用此 POST，避免邮件安全扫描器直接消费 token。
+
+```json
+{ "token": "base64url-token" }
+```
+
+成功：`200 { "status": "ok" }`。
+
+过期、已用、未知、已被替代、email version 不匹配，或目标邮箱已由其他账号拥有的 token 都统一返回：
+
+```json
+{ "error": "invalid_or_expired_token", "message": "verification link is invalid or expired" }
+```
+
+### POST `/password/forgot`
+
+接收邮箱地址；如果存在符合条件且已验证的账号，则排队发送重置邮件。邮箱 capability 启用后，所有可解析请求都返回完全相同的状态与响应体，无论邮箱缺失、非法、未知、未验证、已限流，还是邮件暂时无法入队。
+
+```json
+{ "email": "alice@example.com" }
+```
+
+```http
+HTTP/1.1 202 Accepted
+```
+
+```json
+{
+  "status": "accepted",
+  "message": "If an eligible account matches, password reset instructions will be sent."
+}
+```
+
+Home 会在入队前执行目标邮箱五分钟冷却，以及 IP、邮箱小时级和全局限流；同时将 accepted 响应补齐到最短处理时长，以降低符合条件与不符合条件账号之间的耗时差异。客户端仍必须对所有 accepted 响应展示同一确认 UI。全局邮箱 capability 关闭时，该 route 返回 `404 email_feature_unavailable`。
+
+### POST `/password/reset`
+
+消费短时、单次使用的 reset token 并设置新密码。
+
+```json
+{
+  "token": "base64url-token",
+  "new_password": "new-secret"
+}
+```
+
+也接受 `new-password` alias。成功返回 `200 { "status": "ok" }`，递增 session version，并撤销所有旧 User API bearer token、其他未使用 reset token 与排队中的密码重置邮件任务。认证用户修改密码或 Management API 管理员更新密码时也会执行相同的 reset token 与队列任务撤销。密码重置不会返回登录 session。TOTP 与 passkey 保持不变，下次登录时仍继续生效。
+
+无效、过期、已用、已被替代或 email version 不匹配统一返回：
+
+```json
+{ "error": "invalid_or_expired_token", "message": "password reset link is invalid or expired" }
+```
+
+## TOTP
+
+### GET `/totp`
+
+返回当前认证用户的 TOTP setup data。如果 TOTP 已启用且 `regenerate` 不是 true，则返回现有 secret。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Query 参数：
+
+| Query | Type | 说明 |
+| --- | --- | --- |
+| `issuer` | string | otpauth URL 的可选 issuer。 |
+| `regenerate` | boolean | 生成新的 setup secret，而不是返回当前 secret。 |
+
+示例响应：
+
+```json
+{
+  "secret": "BASE32SECRET",
+  "otp_auth_url": "otpauth://totp/AI48Home:alice?...",
+  "issuer": "AI48Home",
+  "period": 30,
+  "digits": 6,
+  "algorithm": "SHA1",
+  "enabled": false
+}
+```
+
+### POST `/totp/show`
+
+`GET /totp` 的 POST alias。接受同样的 bearer token 和可选 JSON 字段。
+
+示例请求：
+
+```json
+{
+  "issuer": "AI48Home",
+  "regenerate": true
+}
+```
+
+响应：同 `GET /totp`。
+
+### POST `/totp`
+
+校验并保存当前认证用户的 TOTP secret。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+示例请求：
+
+```json
+{
+  "secret": "BASE32SECRET",
+  "code": "123456"
+}
+```
+
+字段：
+
+| Field | Type | Required | 说明 |
+| --- | --- | --- | --- |
+| `secret` | string | yes | 来自 `/totp` 的 Base32 TOTP secret。 |
+| `code` | string | yes | 当前 TOTP code。Aliases: `totp_code`, `totp-code`, `totp`。 |
+| `issuer` | string | no | 存入 TOTP metadata 的 issuer。默认为 `AI48Home`。 |
+
+响应：同 `POST/PATCH /password`。
+
+常见错误：
+
+```json
+{ "error": "invalid_totp", "message": "invalid totp code" }
+{ "error": "invalid_body", "message": "secret and code are required" }
+```
+
+### POST `/totp/bind`
+
+`POST /totp` 的 alias。
+
+### DELETE `/totp`
+
+删除当前认证用户的 TOTP 配置。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+请求体：无。
+
+响应：同 `POST/PATCH /password`；成功删除后 `user.totp_enabled` 为 `false`。
+
+常见错误：
+
+```json
+{ "error": "bearer_token_required", "message": "bearer token is required" }
+{ "error": "invalid_token", "message": "invalid token" }
+```
+
+## 模型目录
+
+模型目录路由位于 `/user` 基础路径下，因此完整路径是 `/user/models` 和 `/user/models/accessible`。`/user/models` 无需认证；`/user/models/accessible` 需要 `/user/register` 或 `/user/login` 返回的 Bearer token。两个路由都不接受也不需要 Management Key。
+
+两个路由回答的是不同的问题。`/user/models` 回答"这个集群能提供什么模型"，访客在拥有账号之前就可以查询。`/user/models/accessible` 回答"我能调用什么、价格是多少、最近表现如何"，答案取决于调用方自己的 API keys 与商务条款。
+
+两个响应都不包含 Management API 数据、凭据身份、节点身份、路由细节、价格规则 ID、价格规则来源、价格规则备注，以及任何其他用户的数据。
+
+v8 模型元数据也可来自上游分组/key 的模型配置：`display-name`、正数 `max-context-length` 和显式 `thinking` 会进入运行时目录。OpenAI 兼容模型还可声明 `image`、`input-modalities`、`output-modalities`；OAuth 别名可覆盖 `display-name`。这些设置影响现有 User API 响应字段，不新增 `/v8/user` 路由。`weight`、`is-compat` 等凭证选项不作为用户模型字段返回。
+
+### 三态语义
+
+模型元数据以显式状态而非空值返回，因为"没有人描述过这个模型"绝不能被呈现成"这个模型不具备该能力"：
+
+| 状态 | 含义 |
+| --- | --- |
+| `known` / `supported` | 上游 provider 或集群配置明确声明了该能力。 |
+| `unsupported` | 模型公布了参数列表，而该能力不在其中。 |
+| `unknown` | 没有任何来源描述过该模型。应渲染为"未公布"，而不是"不支持"。 |
+
+价格与可用性遵循同一规则：
+
+- 没有启用价格规则的模型是 `unpublished`。它不是免费的，也不是价格为 0。
+- 观测样本少于窗口最小值的模型是 `insufficient_data`。它不是 100% 可用。
+
+### GET `/models`
+
+返回公开目录：集群当前能够提供的全部模型。
+
+无需任何 header。
+
+响应示例：
+
+```json
+{
+  "models": [
+    {
+      "id": "gpt-4.1-mini",
+      "display_name": "GPT-4.1 mini",
+      "description": "Fast general purpose model.",
+      "type": "chat",
+      "providers": ["openai"],
+      "context_length": 128000,
+      "max_output_tokens": 16384,
+      "modalities": {
+        "status": "known",
+        "input": ["text", "image"],
+        "output": ["text"]
+      },
+      "capabilities": {
+        "reasoning": { "status": "supported", "levels": ["low", "medium", "high"] },
+        "tool_calling": { "status": "supported" },
+        "structured_output": { "status": "supported" },
+        "parameters": ["tools", "temperature", "reasoning_effort", "response_format"]
+      }
+    }
+  ],
+  "total": 1
+}
+```
+
+模型字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 发起 API 请求时使用的字面量模型标识符。不得翻译或改写。 |
+| `display_name` | string | 运行时目录的可选可读名称，包括配置的 `display-name` 覆盖值；目录没有名称时省略。 |
+| `description` | string | 可选的上游简介。 |
+| `version` | string | 可选的上游版本号。 |
+| `owned_by` | string | 可选的上游归属方。 |
+| `type` | string | 可选的模型类型，例如 `chat`。 |
+| `providers[]` | array | 能够提供该模型的 provider 标识符，与用量记录和价格规则中使用的标识符一致。 |
+| `provider_limits[]` | array | 各 provider 的 token 限制。每项包含 `provider`，并在已知时包含 `context_length` 和 `max_output_tokens`。正数配置 `max-context-length` 会被采用；否则归一目录中的 `context_length` 与 `inputTokenLimit`。 |
+| `context_length` | number | 所有列出 provider 共有的最大输入 token 数。未知或各 provider 限制不同时省略，此时请查看 `provider_limits`。没有 provider 级限制时，采用正数配置 `max-context-length`，或归一目录中的 `context_length` 与 `inputTokenLimit`。 |
+| `max_output_tokens` | number | 所有列出 provider 共有的最大输出 token 数。未知或各 provider 限制不同时省略，此时请查看 `provider_limits`。没有 provider 级限制时，归一 `max_completion_tokens` 与 `outputTokenLimit`。 |
+| `modalities` | object | 见下。 |
+| `capabilities` | object | 见下。 |
+
+`modalities`：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `status` | string | `known` 或 `unknown`。 |
+| `input[]` | array | 支持的输入模态，例如 `text`、`image`、`audio`。仅在 `status` 为 `known` 时出现。 |
+| `output[]` | array | 支持的输出模态。仅在 `status` 为 `known` 时出现。 |
+
+对外发布的取值范围是 `text`、`image`、`audio`、`video`。文档格式不属于模态，因此不在此返回：部分厂商会把 PDF 列为输入类型，其余厂商并不这样描述输入，若一并发布，就会拿只有部分厂商作出的区分去横向比较所有厂商。
+
+模态数据来自运行时模型注册表。内置条目使用人工维护的模型目录（`models.json`）和 `codex_client_models.json` 等厂商清单；v8 OpenAI 兼容模型定义还可显式提供 `input-modalities` 与 `output-modalities`。没有公布模态信息的模型返回 `status: "unknown"`；返回前会做小写化与去重，客户端不能将元数据缺失理解为“仅支持文本”。
+
+某个模型没有被描述是正常结果，不是待补的缺口，更不该事后用推测填上。少数只公开了上下文与速度、从未说明输入类型的模型预计将长期返回 `unknown`；这是目录按设计工作，不是待办事项。
+
+`capabilities`：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `reasoning.status` | string | `supported`、`unsupported` 或 `unknown`。 |
+| `reasoning.levels[]` | array | 可选的推理强度级别。 |
+| `reasoning.budget` | object | 可选的思考预算，含 `min`、`max`、`can_disable`、`dynamic`。模型未声明的键不会出现。 |
+| `tool_calling.status` | string | `supported`、`unsupported` 或 `unknown`。 |
+| `structured_output.status` | string | `supported`、`unsupported` 或 `unknown`。表示模型能否被约束为调用方给定的 schema。该判定在服务端根据参数列表完成，客户端不得自行推导。 |
+| `parameters[]` | array | 可选的请求参数列表。 |
+| `generation_methods[]` | array | 可选的上游生成方法。 |
+
+配置的 thinking levels 在进入注册表前会去除首尾空白、转小写并去重。`none` 启用零预算支持，`auto` 启用动态预算支持。响应仍使用原有 `capabilities.reasoning` 结构；配置键 `zero-allowed` / `dynamic-allowed` 不是响应字段名。
+
+该 route 永远不返回 `pricing` 与 `availability`。它们的缺失本身就是契约，而不是数据缺失：匿名访客无权获取运营方的商务条款。
+
+### GET `/models/accessible`
+
+返回当前认证用户的 API keys 实际可以调用的模型子集，并附带价格与观测到的可用性。
+
+Headers：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+响应示例：
+
+```json
+{
+  "models": [
+    {
+      "id": "gpt-4.1-mini",
+      "display_name": "GPT-4.1 mini",
+      "providers": ["openai"],
+      "context_length": 128000,
+      "max_output_tokens": 16384,
+      "modalities": { "status": "known", "input": ["text", "image"], "output": ["text"] },
+      "capabilities": { "reasoning": { "status": "supported" }, "tool_calling": { "status": "supported" } },
+      "pricing": {
+        "status": "published",
+        "providers": [
+          {
+            "provider": "openai",
+            "tiers": [
+              {
+                "service_tier": "*",
+                "is_default": true,
+                "rungs": [
+                  {
+                    "min_input_tokens": 0,
+                    "input_price_per_million": 0.4,
+                    "output_price_per_million": 1.6,
+                    "cache_read_price_per_million": 0.1,
+                    "cache_write_price_per_million": 0.5,
+                    "request_price": 0
+                  },
+                  {
+                    "min_input_tokens": 128000,
+                    "input_price_per_million": 0.8,
+                    "output_price_per_million": 3.2,
+                    "cache_read_price_per_million": 0.2,
+                    "cache_write_price_per_million": 1,
+                    "request_price": 0
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "availability": {
+        "status": "observed",
+        "window": {
+          "from": "2026-07-25T00:00:00Z",
+          "to": "2026-08-01T00:00:00Z",
+          "hours": 168,
+          "min_samples": 10
+        },
+        "sample_count": 240,
+        "success_count": 236,
+        "failed_count": 4,
+        "availability_rate": 0.9833,
+        "avg_latency_ms": 2140.5,
+        "avg_ttft_ms": 318.2,
+        "output_tokens_per_second": 42.17,
+        "first_observed_at": "2026-07-25T04:11:02Z",
+        "last_observed_at": "2026-08-01T09:52:44Z"
+      }
+    }
+  ],
+  "total": 1,
+  "access": {
+    "restricted": false,
+    "api_key_count": 2,
+    "reason": "unrestricted"
+  }
+}
+```
+
+`access`：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `restricted` | boolean | 当用户的每一个 API key 都被限定在 model groups 内时为 `true`。 |
+| `api_key_count` | number | 用户持有的 API key 数量。 |
+| `reason` | string | `unrestricted`、`model_groups` 或 `no_api_keys`。用于向用户解释列表为什么是空的，而不是只显示一个空态。 |
+
+访问范围是用户各个 key 的并集而非交集：只要持有一个未限定范围的 key，整个目录都可访问。一个 key 都没有则任何模型都不可访问，因为没有凭据的账号无法调用集群。
+
+`pricing` 是价格阶梯而不是标量，因为计费先按 service tier 再按输入规模解析：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `status` | string | `published` 或 `unpublished`。 |
+| `providers[]` | array | 每个既能提供该模型、又存在启用价格规则的 provider 一项。指向无法提供该模型的 provider 的规则会被排除，因为它们不构成报价。 |
+| `providers[].provider` | string | Provider 标识符。 |
+| `providers[].tiers[]` | array | 每个 service tier 一项。 |
+| `providers[].tiers[].service_tier` | string | Tier 名称，通配 tier 为 `*`。 |
+| `providers[].tiers[].is_default` | boolean | 仅在 `*` tier 上出现且为 `true`。请求未指定 tier、或指定了没有定价的 tier 时按该 tier 计费。 |
+| `providers[].tiers[].rungs[]` | array | 按 `min_input_tokens` 升序。请求按其满足的最后一个阶梯计价。 |
+| `rungs[].min_input_tokens` | number | 该阶梯生效的输入 token 阈值。 |
+| `rungs[].input_price_per_million` | number | 每百万输入 token 价格。 |
+| `rungs[].output_price_per_million` | number | 每百万输出 token 价格。 |
+| `rungs[].cache_read_price_per_million` | number | 每百万 cache read token 价格。 |
+| `rungs[].cache_write_price_per_million` | number | 每百万 cache write token 价格。 |
+| `rungs[].request_price` | number | 每次请求的固定价格。 |
+
+价格分量为 0 时会显式返回而不是省略：provider 不对 cache read 计费本身就是一种声明，省略字段会让它与"没有人为该分量定价"无法区分。整个模型没有启用规则时返回 `"status": "unpublished"` 且不带 `providers`。
+
+本版本不返回折扣元数据。客户端不得从上述字段推导、推断或展示折扣。
+
+`availability` 汇总滚动窗口内观测到的实际表现：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `status` | string | `observed` 或 `insufficient_data`。 |
+| `window.from` / `window.to` | string | 观测窗口的 RFC3339 边界，半开区间 `[from,to)`。 |
+| `window.hours` | number | 窗口长度（小时）。当前为 `168`。 |
+| `window.min_samples` | number | 发布可用率所需的最小观测数。当前为 `10`。 |
+| `sample_count` | number | 窗口内的观测数。始终返回，包括为 `0` 时。 |
+| `success_count` / `failed_count` | number | 仅在 `status` 为 `observed` 时出现。 |
+| `availability_rate` | number | 成功数除以观测数，保留四位小数。**仅在 `status` 为 `observed` 时出现。** |
+| `avg_latency_ms` | number | 可测量的成功请求的端到端平均延迟。无可测量样本时不返回。 |
+| `avg_ttft_ms` | number | 平均首 token 时间。仅流式响应上报，因此可能在 `avg_latency_ms` 存在时缺失。 |
+| `output_tokens_per_second` | number | 总输出 token 除以总生成耗时，长生成的权重更高，与调用方的实际体感一致。 |
+| `first_observed_at` / `last_observed_at` | string | 实际观测的 RFC3339 时间边界，可能远窄于窗口。`insufficient_data` 的模型也可能带有 `last_observed_at`。 |
+
+`status` 为 `insufficient_data` 时不返回可用率、延迟与吞吐。客户端必须渲染为"数据不足"，绝不能渲染为完全可用。该汇总是集群级的模型健康度，在进程内做短时缓存，不包含任何单个用户的请求数据。
+
+## 周期限额
+
+### POST `/period-limits/reset`
+
+完整端点：`POST /user/period-limits/reset`，需要当前用户 bearer session。**不要发送请求体或 query 参数**（包括 `{}` 也拒绝），不接受用户、窗口或模式选择器。
+
+成功请求只消费一次额度，并重置所有启用的 `5h`/`1d`/`7d`/`30d` 窗口，包括限额为零的窗口。null 限额的禁用窗口保持不变。沿用 counter 重置语义：清除启用窗口起点并更新 usage epoch，不改变限额、credits、扣费记录、余额流水或请求历史。零限额仍为零。
+
+HTTP 200：`{"status":"ok","limits": <包含 reset_allowance 的完整周期限额状态>}`。行锁、续期、带余额条件的递减、窗口重置及状态重建在同一事务内完成；任何失败均回滚。
+
+请求体/选择器返回 HTTP 400（`error: "invalid body"`）。没有启用窗口时返回 HTTP 409 `reset_allowance_no_enabled_windows`；额度未配置、过期或耗尽返回 HTTP 409 `reset_allowance_unavailable`。错误对象包含 `error` 与 `message`。认证规则不变：无效/缺失 session 返回 401；待审批用户返回 403 `approval_pending`。意外数据库错误返回 500 `period_limits_reset_failed`。
+
+管理及用户 capability 均声明 `capabilities.user_reset_allowance: true`。`GET /user/period-limits` 包含：
+
+```json
+{"mode":"one_time","amount":2,"available":1,"expires_at":null,"renews_at":null}
+```
+
+mode 为 one_time/monthly；未配置时为空字符串，amount/available 为零，两个时间为 null。amount/available 为非负整数。one_time 的 expires_at 为 RFC3339/null，到达过期时间后 available 为零，renews_at 为 null。monthly 的 expires_at 为 null，按用户时区（默认 Asia/Shanghai）每月一日零点补充至 amount，不结转，跳过月份不累积；renews_at 为下次月初的 RFC3339 时间。只读状态计算延迟续期，成功消费时持久化。管理员通过 `PUT /v8/management/users/:id/reset-allowance` 设置唯一策略。
+
+### GET `/period-limits`
+
+返回当前认证用户配置的周期限额窗口及当前使用量。该路由只读，并且不会暴露其他用户的限额。
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+只有 `enabled: true` 的窗口会被执行。`used`、`limit` 与 `remaining` 均为 credit 数值；适用时，`reset_at` 表示下一次已知重置时间。
+
+```json
+{
+  "user_id": 42,
+  "timezone": "Asia/Shanghai",
+  "credits": 25,
+  "credits_unlimited": false,
+  "windows": [
+    {
+      "id": "7d",
+      "enabled": true,
+      "limit": 10,
+      "used": 3.5,
+      "remaining": 6.5,
+      "mode": "calendar",
+      "active": true,
+      "window_start": "2026-09-21T00:00:00Z",
+      "window_end": "2026-09-28T00:00:00Z",
+      "reset_at": "2026-09-28T00:00:00Z"
+    }
+  ]
+}
+```
+
+## 当前用户请求日志摘要
+
+### GET `/request-logs`
+
+完整端点为 `GET /user/request-logs`。必须使用当前用户的 bearer session；缺失、无效、过期、已撤销或已删除用户的 session 返回 `401`。待审批用户返回 `403 approval_pending`。`GET /user/capabilities` 返回 `request_logs: true`，旧版本可能不包含该字段。
+
+只支持以下查询参数：
+
+| 参数 | 含义 |
+| --- | --- |
+| `from` | 可选 RFC3339 时间（支持小数秒和时区偏移），包含起点。 |
+| `to` | 可选 RFC3339 时间，不包含终点。 |
+| `request_id` | 可选，精确匹配；不支持子串、后缀、通配符或全文搜索。 |
+| `limit` | 正整数；默认 50，最大限制为 200。 |
+| `offset` | 非负整数；默认 0。 |
+
+无效时间（包括显式空值、仅日期和 Unix 秒）、起点晚于终点、非法或溢出整数、非正数 limit、负数 offset 均返回 `400`。相等的时间边界返回空结果。未知参数被忽略：`user_id`、`user`、`api_key`、key ID、`key`、`search` 和管理端过滤条件不会影响归属、匹配或计数。
+
+```json
+{
+  "items": [
+    {
+      "timestamp": "2026-06-10T01:02:03Z",
+      "event_type": "completion",
+      "status": "success",
+      "model": "gpt-4.1-mini",
+
+      "tokens": 1500,
+      "latency_ms": 123,
+      "request_id": "req-first"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0,
+  "summary": {
+    "by_model": [{"model": "gpt-4.1-mini", "requests": 1}],
+    "average_latency_ms": 123,
+    "status": {"success": 1, "failed": 0}
+  }
+}
+```
+
+响应 envelope 包含 `items`、`total`、`limit`、`offset` 和新增的 `summary`。SQL 聚合覆盖**分页前的全部匹配记录**，与列表和 `total` 使用完全相同的归属、`from`、`to` 和精确 `request_id` 过滤范围。`summary` 包含：
+
+- `by_model`：每个匹配模型的 `{model: string, requests: number}`，按 `requests` 降序、`model` 升序排序，不截断。
+- `average_latency_ms`：仅对正数 `latency_ms` 求数值平均；`<= 0` 表示未测量，不参与平均。没有正数测量值时返回 `null`。
+- `status`：`{success: number, failed: number}`，依据与列表状态相同的已存储 failed 标志计数。两者之和等于 `total`；失败记录仅在具有可信历史归属时纳入。
+
+没有匹配记录时返回 `summary: {"by_model": [], "average_latency_ms": null, "status": {"success": 0, "failed": 0}}`。分页 offset 超出最后一条匹配记录时，仍返回完整过滤范围的汇总和 `total`。
+
+每项严格包含七个字段：时间（`timestamp`，UTC RFC3339）、事件（`event_type`）、状态（`status`）、模型（`model`）、Token 数（`tokens`，accounting total）、延迟（`latency_ms`）和请求 ID（`request_id`）。事件类别为 `completion`、`embedding`、`response`、`message`、`stream` 或 `unknown`，不会返回任意事件元数据。状态仅为 `success` 或 `failed`，不包含错误详情或 HTTP 状态码。按时间降序、内部 usage ID 降序排序；内部 ID 不对外返回。`total` 为按归属和过滤条件限定后、分页前的计数。空结果使用 `items: []`。
+
+归属只依据关联 usage 的历史 `billing_charge.user_id` 快照，该快照在 usage 入库并记录计费归属时捕获。列表、计数和所有 summary 聚合均要求快照匹配当前认证用户 ID。**绝不回退到 API key 当前所有者**，不信任 payload 中的用户身份，也不按当前绑定补填历史归属。重新分配或删除 key 不会转移历史日志；删除用户会使其无法访问，日志不会转移给其他用户。缺失、null 或未知归属的记录全部排除，包括没有快照的旧记录、失败请求和非计费记录。因此本接口是 fail-closed 的已归属 usage 摘要，而非完整原始请求日志归档。
+
+不会返回 provider、HTTP 状态码、客户端/key 标识、secret、路由、计费数据、原始 payload、错误详情或下载 URL。本接口不授予管理端列表、详情或文件下载权限。
+
+## Playground 对话历史
+
+用户面板的对话试验场通过 `/user/chat/conversations` 按用户保存对话。所有 route 均需要当前用户的 bearer session（缺失返回 `401`，待审批用户返回 `403 approval_pending`）。归属仅来自该 session：其他用户的对话返回 `404 not_found`，任何 route 都不接受 `user_id`。`GET /user/capabilities` 返回 `chat_history: true`；旧版本不包含该字段，客户端应回退到浏览器本地存储。
+
+Home 只保存客户端发送的对话记录，这些 route 不会调用模型，Management API 也没有读取对话的 route。删除用户时会同时删除其对话。
+
+对话 ID 由客户端生成：1–64 个字符，只能包含 `A-Z a-z 0-9 - _`，否则返回 `400 invalid_chat_id`。
+
+限制：
+
+- 每个用户最多保留 100 个对话，保存时会清理超出上限的最久未更新对话。
+- 单个对话最多 500 条消息，单次保存请求体最大 4 MiB（超出返回 `413 request_too_large`）。
+- `title` 截断为 200 个字符；为空时取第一条用户消息的前 60 个字符。
+
+### GET `/chat/conversations`
+
+按最近更新时间倒序列出对话，不含消息。响应为 `{"items": [{"id", "title", "model", "message_count", "created_at", "updated_at"}], "limit": 100}`。
+
+### GET `/chat/conversations/:id`
+
+以 `{"conversation": {...}}` 返回包含 `messages` 的单个对话；未知 ID 返回 `404 not_found`。
+
+### PUT `/chat/conversations/:id`
+
+创建对话，或替换其 `title`、`model` 和 `messages`。替换时保留 `created_at`，`updated_at` 设为服务器时间。每条消息包含 `id`、`role`（`user` 或 `assistant`）、`content`，以及可选的 `reasoning`、`model`、`stopped`、`error`、`usage`、`latency_ms`。`messages` 为空或 `role` 无效时返回 `400 invalid_chat`；未知字段会被忽略。响应为保存后的 `{"conversation": {...}}`。
+
+### DELETE `/chat/conversations/:id`
+
+删除单个对话并返回 `{"status": "ok"}`；未知 ID 返回 `404 not_found`。
+
+### DELETE `/chat/conversations`
+
+删除当前用户的所有对话并返回 `{"status": "ok"}`。
+
+## Billing
+
+用户计费路由位于 `/user` 下：`/user/billing/overview`、`/user/billing/charges`、`/user/billing/balance-records` 和 `/user/billing/recharge`。全部需要现有 Bearer session，用户身份严格来自 session；查询参数或 JSON 中的 `user_id` 被忽略。
+
+用户计费响应不包含管理员备注、全局汇总、模型价格管理数据、代理池数据、原始 API keys、脱敏 API keys、价格快照、匹配的价格规则、endpoint 或其他用户的数据。扣费条目不包含 `balance_before`；余额分类账条目包含该字段，但不暴露存储的备注和操作人信息。
+
+用户计费的 `from` 和 `to` 查询参数接受 `YYYY-MM-DD`、RFC3339 或 Unix 秒，并统一使用半开区间 `[from,to)`。Unix 秒值必须位于 `2000-01-01T00:00:00Z` 到 `9999-12-31T23:59:59Z` 之间；毫秒时间戳会被拒绝。只有日期的 `to` 会转换为下一个 UTC 零点，从而完整包含结束 UTC 日期。显式时间戳形式的 `to` 是精确的排他上界，不会自动扩展。需要查询完整非 UTC 自然日的客户端应发送从本地零点到下一个本地零点的 RFC3339 边界，例如 `2026-06-10T00:00:00+08:00` 到 `2026-06-11T00:00:00+08:00`。
+
+### GET `/billing/overview`
+
+返回当前认证用户的计费概览。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
+| `to` | string | 可选排他结束时间；纯日期通过使用下一个 UTC 零点完整包含当天，显式时间戳精确保留。 |
+
+响应示例：
+
+```json
+{
+  "overview": {
+    "current_balance": 18.75,
+    "today_spend": 1.25,
+    "month_spend": 1.25,
+    "top_models": [
+      {
+        "id": "openai/gpt-4.1-mini",
+        "label": "gpt-4.1-mini",
+        "amount": 1.25,
+        "request_count": 1
+      }
+    ]
+  }
+}
+```
+
+概览字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `current_balance` | number | 当前认证用户余额。 |
+| `today_spend` | number | 当前计费概览查询返回的消费值。 |
+| `month_spend` | number | 当前计费概览查询返回的消费值。 |
+| `top_models[]` | array | 模型消费条目，字段为 `id`、`label`、`amount`、`request_count`。 |
+| `total_charge_amount` | number | 所选时间范围内当前用户请求扣费总额。 |
+| `total_recharge_amount` | number | 所选时间范围内当前用户充值总额。 |
+| `total_deduct_amount` | number | 所选时间范围内当前用户手工扣减总额，不含请求扣费。 |
+| `request_count` | integer | 所选时间范围内当前用户计费请求数。 |
+| `input_tokens`、`output_tokens`、`cache_tokens` | integer | 所选时间范围内当前用户计费 token 汇总。 |
+
+不传时间范围时汇总全部可用记录。`current_balance` 始终为当前余额。原有 `today_spend` 和 `month_spend` 保持行为不变，均返回所选范围的请求扣费总额。
+
+### GET `/billing/balance-records`
+
+仅返回 session 用户的充值及手工扣减分类账，按时间倒序排列。支持与 charges 相同的 `from`/`to`，以及 `limit`（默认 `50`，最大 `200`）和 `offset`（默认 `0`）。非正数/非整数 limit、负数/非整数 offset 返回 `400`。用户筛选输入被忽略。
+
+响应：`200 { "items": BalanceRecord[], "total": integer, "limit": integer, "offset": integer }`。`total` 是分页前当前用户的匹配记录数；空页返回 `items: []`。
+
+`BalanceRecord` 字段：`id`（string）、`type`（`recharge` 或 `deduct`）、`amount`（number）、`balance_before`（number）、`balance_after`（number）、`created_at`（RFC3339 string）。不返回备注、操作人或用户 ID。
+
+### POST `/billing/recharge`
+
+提交需要**管理员批准**的自助充值申请。提交时不修改余额，也不生成分类账；这不是支付集成。每个用户最多只能有一笔待批准申请，再次提交返回 `409 topup_pending`。
+
+请求：`{ "amount": 12.5, "note": "可选审计备注" }`。`amount` 必填，必须为正且有限的 JSON number。缺失/null/零/负数返回 `400 invalid_amount`；非法 JSON、错误字段类型、NaN、Infinity 或数字溢出返回 `400 invalid_body`。导致余额溢出、或过小而无法增加 float64 余额的有限金额返回 `400 invalid_amount`。`note` 去除首尾空白后存入申请，批准时复制到分类账。传入的 `user_id`、`operator`、`type` 无法改变目标用户或操作。
+
+响应为 HTTP **202**，余额保持不变：
+
+```json
+{
+  "request": {
+    "id": 123, "user_id": 1, "amount": 12.5, "note": "可选审计备注",
+    "status": "pending", "created_at": "2026-10-07T10:00:00Z",
+    "updated_at": "2026-10-07T10:00:00Z", "approved_at": null, "ledger_id": null
+  },
+  "current_balance": 10
+}
+```
+
+申请 ID 为数字，分类账 ID 为字符串。管理员通过 `POST /v8/management/users/:id/topup/approve` 提交明确的 `request_id` 批准申请。金额仅从数据库读取；余额、分类账、申请状态及批准时间在同一事务内更新，重复批准不会重复入账。保留 `credits_unlimited` 行为：批准时生成分类账但不修改数值余额。未认证返回 `401`，账号尚未批准返回 `403 approval_pending`；数据库错误返回 `500 billing_recharge_failed`，不会部分写入。
+
+### GET `/billing/recharge-request`
+
+仅限认证用户。返回 `200 { "request": RechargeRequest | null }`，字段同上。只读取 session 用户自己的待批准申请，忽略传入的用户 ID。批准后返回 `null`，除非已提交新申请。未认证返回 `401`（账号尚未批准为 `403 approval_pending`）；数据库错误返回 `500 billing_recharge_request_load_failed`。
+
+`GET /user/capabilities` 与 `GET /v8/management/capabilities` 均声明 `capabilities.topup_approval: true`。客户端应依此启用批准流程；字段缺失或为 false 表示旧部署未声明支持此契约。申请持久化于 `billing_recharge_request`；数据库/快照版本 9 保存待批准及已批准申请。旧版快照仍可导入，但不包含充值申请。
+
+### GET `/billing/charges`
+
+扣款查询的 `input_tokens` 与 `output_tokens` 使用读取时归一化的展示口径：关联 usage 的 Token Accounting 为 v2 且质量为 `complete` 时，输入包含未缓存输入、缓存读取与缓存写入，输出包含普通输出与推理 Token；尚未回填、非完整或缺失 usage 的记录保留扣款快照原值。此转换不改写数据库，不改变扣款金额、价格快照、余额或价格档位选择。
+
+列出当前认证用户的扣费记录。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
+| `to` | string | 可选排他结束时间；纯日期通过使用下一个 UTC 零点完整包含当天，显式时间戳精确保留。 |
+| `limit` | integer | 可选分页大小；默认 `50`，最大 `200`。非法的非正数或非整数会返回 `400`。 |
+| `offset` | integer | 可选分页偏移；默认 `0`。负数或非整数会返回 `400`。 |
+
+响应结构：
+
+```json
+{
+  "items": [
+    {
+      "id": "charge_xxx",
+      "created_at": "2026-06-10T10:00:00Z",
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "input_tokens": 1000,
+      "output_tokens": 500,
+      "amount": 1.25,
+      "balance_after": 18.75,
+      "request_id": "req_xxx"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+扣费条目字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 扣费记录 ID。 |
+| `created_at` | string | 扣费创建时间。 |
+| `provider` | string | Provider 名称。 |
+| `model` | string | Model 名称。 |
+| `input_tokens` | integer | 输入 tokens。 |
+| `output_tokens` | integer | 输出 tokens。 |
+| `amount` | number | 扣费金额。 |
+| `balance_after` | number | 当前认证用户扣费后的余额。 |
+| `request_id` | string | 与扣费关联的 request ID。 |
+
+常见错误：
+
+```json
+{ "error": "bearer_token_required", "message": "bearer token is required" }
+{ "error": "invalid_token", "message": "invalid token" }
+{ "error": "invalid_from", "message": "from must be YYYY-MM-DD, RFC3339, or unix seconds" }
+{ "error": "invalid_to", "message": "to must be YYYY-MM-DD, RFC3339, or unix seconds" }
+{ "error": "invalid_time_range", "message": "from must not be after to" }
+{ "error": "invalid_limit", "message": "limit must be a positive integer" }
+{ "error": "invalid_offset", "message": "offset must be a non-negative integer" }
+```
+
+## Organizations（组织）
+
+`/organizations` 下的接口均为新增，个人接口（`/api-keys`、`/billing/*`、`/analytics`、`/request-logs`）行为不变；未加入组织的用户只会得到空列表。组织由管理员创建，非成员访问 `/organizations/:org_id` 一律返回 404。`GET /capabilities` 返回 `organizations: true`。
+
+角色：`owner` 可查看组织全部数据并管理成员、成员限额、全部 Key 与充值；`member` 只能查看自己的 Key、扣费、统计与请求日志，访问仅 owner 接口返回 403 `organization_owner_required`。
+
+接口与字段与英文文档 `api.md` 的 Organizations 章节一致。成员超出消费限额时请求返回 429，离开组织后其 Key 被删除。
+
+## API Keys
+
+API key routes 只操作绑定到当前认证 `user.id` 的 API key。
+
+### GET `/api-keys`
+
+列出当前认证用户拥有的 API key。每项包含 `display_name`（未设置时为 null）；创建和更新接口返回相同的条目格式。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+示例响应：
+
+```json
+{
+  "api_keys": [
+    {
+      "id": 1,
+      "api-key": "client-key",
+      "api_key": "client-key",
+      "display_name": "生产环境 key",
+      "channels": [1],
+      "model_groups": [2],
+      "created_at": "2026-06-02T10:00:00Z",
+      "updated_at": "2026-06-02T10:00:00Z"
+    }
+  ],
+  "items": [
+    {
+      "id": 1,
+      "api-key": "client-key",
+      "api_key": "client-key",
+      "display_name": "生产环境 key",
+      "channels": [1],
+      "model_groups": [2],
+      "created_at": "2026-06-02T10:00:00Z",
+      "updated_at": "2026-06-02T10:00:00Z"
+    }
+  ]
+}
+```
+
+### POST `/api-keys`
+
+创建归属于当前认证用户的 API key。如果省略 `api_key`，Home 会自动生成一个。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+示例请求：
+
+```json
+{
+  "api_key": "client-key",
+  "display_name": "生产环境 key",
+  "channels": [1],
+  "model_groups": [2]
+}
+```
+
+字段：
+
+| Field | Type | Required | 说明 |
+| --- | --- | --- | --- |
+| `api_key` | string | no | Client API key。Aliases: `api-key`, `key`, `value`。 |
+| `display_name` | string 或 null | no | 可选名称；会去除首尾空白，最多 128 个 Unicode 字符，不允许控制字符。空字符串、纯空白或 `null` 表示清除。 |
+| `channels` | array of integer | no | Channel group IDs。空数组或省略表示不限制。 |
+| `model_groups` | array of integer | no | Model group IDs。Alias: `model-groups`。省略时，Home 会继承该用户所有有效 API key 的 model group 并集；如果没有已限定 scope 的 key，则新 key 不受限制。显式发送空数组可创建不受限制的 key。 |
+
+示例响应：
+
+```json
+{
+  "api_key": {
+    "id": 1,
+    "api-key": "client-key",
+    "api_key": "client-key",
+    "display_name": "生产环境 key",
+    "channels": [1],
+    "model_groups": [2],
+    "created_at": "2026-06-02T10:00:00Z",
+    "updated_at": "2026-06-02T10:00:00Z"
+  }
+}
+```
+
+### POST `/api-key`
+
+`POST /api-keys` 的 alias。
+
+### PATCH `/api-keys`
+
+修改当前认证用户拥有的 API key。目标可以通过 `id` 或 API key value 指定。
+
+示例请求：
+
+```json
+{
+  "id": 1,
+  "api_key": "new-client-key",
+  "display_name": "重命名的 key",
+  "channels": [],
+  "model_groups": []
+}
+```
+
+字段：
+
+| Field | Type | Required | 说明 |
+| --- | --- | --- | --- |
+| `id` | integer | conditionally | API key record ID。 |
+| `api_key` | string | conditionally | 提供 `id` 时表示新的 API key；没有 `id` 时表示目标 API key。Aliases: `api-key`, `key`, `value`。 |
+| `old` | string | conditionally | 目标 API key value。 |
+| `new` | string | no | 新 API key value。 |
+| `new_api_key` | string | no | 新 API key value。Alias: `new-api-key`。 |
+| `display_name` | string 或 null | no | 可选名称；省略时保留原值，空字符串、纯空白或 `null` 时清除。校验规则同创建接口。 |
+| `channels` | array of integer | no | 替换 channel group IDs。 |
+| `model_groups` | array of integer | no | 替换 model group IDs。Alias: `model-groups`。 |
+
+响应：同 `POST /api-keys`。
+
+常见错误：
+
+```json
+{ "error": "not_found", "message": "record not found" }
+{ "error": "invalid_body", "message": "api key id or value is required" }
+{ "error": "api_key_exists", "message": "api key already exists" }
+{ "error": "invalid_display_name", "message": "API key display_name is invalid: control characters are not allowed" }
+```
+
+### PATCH `/api-key`
+
+`PATCH /api-keys` 的 alias。
+
+### PATCH `/api-keys/:id`
+
+按 numeric record ID 修改当前认证用户拥有的 API key。
+
+Path 参数：
+
+| Parameter | Type | Required | 说明 |
+| --- | --- | --- | --- |
+| `id` | integer | yes | `api_key.id`；必须大于 `0`。 |
+
+响应：同 `POST /api-keys`。
+
+### PATCH `/api-key/:id`
+
+`PATCH /api-keys/:id` 的 alias。
+
+### DELETE `/api-keys`
+
+删除当前认证用户拥有的 API key。目标可以通过 `id` 或 API key value 指定。
+
+Query 参数：
+
+| Query | Type | 说明 |
+| --- | --- | --- |
+| `id` | integer | API key record ID。 |
+| `api_key` | string | API key value。 |
+| `api-key` | string | `api_key` 的 alias。 |
+| `key` | string | `api_key` 的 alias。 |
+| `value` | string | `api_key` 的 alias。 |
+
+示例响应：
+
+```json
+{ "status": "ok" }
+```
+
+### DELETE `/api-key`
+
+`DELETE /api-keys` 的 alias。
+
+### DELETE `/api-keys/:id`
+
+按 numeric record ID 删除当前认证用户拥有的 API key。
+
+Path 参数：
+
+| Parameter | Type | Required | 说明 |
+| --- | --- | --- | --- |
+| `id` | integer | yes | `api_key.id`；必须大于 `0`。 |
+
+响应：
+
+```json
+{ "status": "ok" }
+```
+
+### DELETE `/api-key/:id`
+
+`DELETE /api-keys/:id` 的 alias。
+
+## Passkeys
+
+Passkey routes 操作存储在 `user.passkey` 中的 entries。
+
+### POST `/passkeys`
+
+为当前认证用户创建 passkey entry。如果没有提供 `id`，Home 会自动生成。如果没有提供 `secret` 或 `credential`，Home 会生成一次性 secret，并且只在本次响应中返回。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+示例请求：
+
+```json
+{
+  "name": "Laptop"
+}
+```
+
+字段：
+
+| Field | Type | Required | 说明 |
+| --- | --- | --- | --- |
+| `id` | string | no | Passkey ID。Aliases: `passkey_id`, `passkey-id`。 |
+| `name` | string | no | 显示名称。 |
+| `secret` | string | no | 用于 hash 并存储的 passkey 登录 secret。Alias: `passkey_secret`。 |
+| `credential` | object | no | 用于 passkey 登录比较的 opaque credential JSON。 |
+
+示例响应：
+
+```json
+{
+  "passkey": {
+    "id": "pk_xxx",
+    "name": "Laptop",
+    "created_at": "2026-06-02T10:00:00Z"
+  },
+  "secret": "one-time-returned-secret"
+}
+```
+
+常见错误：
+
+```json
+{ "error": "passkey_exists", "message": "passkey already exists" }
+```
+
+### POST `/passkey`
+
+`POST /passkeys` 的 alias。
+
+### DELETE `/passkeys`
+
+删除当前认证用户的 passkey entry。
+
+Query 参数：
+
+| Query | Type | 说明 |
+| --- | --- | --- |
+| `id` | string | Passkey ID。 |
+
+示例响应：
+
+```json
+{ "status": "ok" }
+```
+
+常见错误：
+
+```json
+{ "error": "not_found", "message": "passkey not found" }
+{ "error": "invalid_body", "message": "passkey id is required" }
+```
+
+### DELETE `/passkey`
+
+`DELETE /passkeys` 的 alias。
+
+### DELETE `/passkeys/:id`
+
+按 ID 删除当前认证用户的 passkey entry。
+
+Path 参数：
+
+| Parameter | Type | Required | 说明 |
+| --- | --- | --- | --- |
+| `id` | string | yes | Passkey ID。 |
+
+响应：
+
+```json
+{ "status": "ok" }
+```
+
+### DELETE `/passkey/:id`
+
+`DELETE /passkeys/:id` 的 alias。

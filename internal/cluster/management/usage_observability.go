@@ -78,6 +78,7 @@ func (h *Handler) GetCapabilities(c *gin.Context) {
 			"model_channel_bindings":               true,
 			"topology":                             true,
 			"users":                                true,
+			"organizations":                        true,
 			"access_groups":                        true,
 			"channel_group_credential_candidates":  true,
 			"user_period_limits":                   true,

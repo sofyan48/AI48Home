@@ -55,7 +55,7 @@ AI48Home provides the backend service, and [AI48HomeUI](https://github.com/sofya
 
 AI48Home binaries and Docker images include the Web interface, so AI48HomeUI does not need to be deployed separately. After starting Home, open its address, such as `http://localhost:8327`. The administrator console is at `/admin`, and the user workspace is at `/app`.
 
-Administrator access requires a management key; see the [authentication instructions](docs/management/api.md#authentication). Database setup and configuration import are covered under [Cluster Mode](#cluster-mode). Update the Home binary or Docker image to update the bundled Web interface.
+Administrator access requires a management key; see the [authentication instructions](docs/ai48home/management/api.md#authentication). Database setup and configuration import are covered under [Cluster Mode](#cluster-mode). Update the Home binary or Docker image to update the bundled Web interface.
 
 ### Install from GHCR
 
@@ -387,7 +387,7 @@ docker compose -f "$COMPOSE_FILE" run --rm \
 
 ## Strict Credential Concurrency Limits
 
-See the [Management API documentation](docs/management/api.md#credential-concurrency-policy-and-limiter-routes) for credential concurrency policy configuration and activation prerequisites.
+See the [Management API documentation](docs/ai48home/management/api.md#credential-concurrency-policy-and-limiter-routes) for credential concurrency policy configuration and activation prerequisites.
 
 ## Contributing
 
@@ -396,7 +396,7 @@ Issues, feature requests, and pull requests are welcome. Choose the repository t
 - **Frontend / Web UI**: Report page display and interaction issues in [AI48HomeUI Issues](https://github.com/sofyan48/AI48HomeUI/issues), and submit frontend changes to AI48HomeUI.
 - **Backend**: Report service, scheduling, and data management issues in [AI48Home Issues](https://github.com/sofyan48/AI48Home/issues), and submit backend changes here.
 
-For changes spanning both projects, link the related issues or pull requests. Update the relevant [Management API](docs/management/api.md) or [User API](docs/user/api.md) documentation when an interface changes.
+For changes spanning both projects, link the related issues or pull requests. Update the relevant AI48Home [Management API](docs/ai48home/management/api.md) or [User API](docs/ai48home/user/api.md) documentation when an interface changes. See the [documentation layout](docs/README.md) for the separation between AI48Home and upstream documentation.
 
 1. Fork the repository.
 2. Create your feature branch (`git checkout -b feature/amazing-feature`).

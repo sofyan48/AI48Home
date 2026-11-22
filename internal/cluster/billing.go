@@ -137,8 +137,10 @@ type BillingChargeRecord struct {
 	BilledCacheWriteTokens *int64 `gorm:"column:billed_cache_write_tokens"`
 	BilledReasoningTokens  *int64 `gorm:"column:billed_reasoning_tokens"`
 	// CostBreakdown itemizes the amount by priced token bucket.
-	CostBreakdown JSONB     `gorm:"column:cost_breakdown"`
-	CreatedAt     time.Time `gorm:"column:created_at;not null;index:idx_billing_charge_time_order,priority:1,sort:desc;index:idx_billing_charge_user_time,priority:2,sort:desc;index:idx_billing_charge_provider_model_time,priority:3,sort:desc"`
+	CostBreakdown JSONB `gorm:"column:cost_breakdown"`
+	// ActorUserID is the organization member whose key produced the charge.
+	ActorUserID *uint     `gorm:"column:actor_user_id;index:idx_billing_charge_actor_time,priority:1"`
+	CreatedAt   time.Time `gorm:"column:created_at;not null;index:idx_billing_charge_time_order,priority:1,sort:desc;index:idx_billing_charge_user_time,priority:2,sort:desc;index:idx_billing_charge_provider_model_time,priority:3,sort:desc;index:idx_billing_charge_actor_time,priority:2,sort:desc"`
 }
 
 func (BillingChargeRecord) TableName() string { return "billing_charge" }
@@ -263,6 +265,8 @@ type BillingChargeQuery struct {
 	ToExclusive *time.Time
 	UserText    string
 	UserID      *uint
+	// ActorUserID narrows organization charges to one member.
+	ActorUserID *uint
 	Provider    string
 	Model       string
 	// AuthIndex filters charges by the serving credential.
@@ -856,6 +860,7 @@ func (r *Repository) createBillingChargeForUsageTx(ctx context.Context, tx *gorm
 		PayloadHash:            payloadHash,
 		UserID:                 userID,
 		APIKeyID:               billingAPIKeyID(apiKey),
+		ActorUserID:            billingAPIKeyActorUserID(apiKey),
 		APIKeyLabel:            billingAPIKeyLabel(apiKey),
 		APIKeyMasked:           maskBillingAPIKey(usage.APIKey),
 		Provider:               strings.ToLower(strings.TrimSpace(usage.Provider)),
@@ -1126,6 +1131,9 @@ func billingChargeQueryScope(scope *gorm.DB, query BillingChargeQuery) *gorm.DB 
 	}
 	if userID := normalizeOptionalUserID(query.UserID); userID != nil {
 		scope = scope.Where(`"billing_charge"."user_id" = ?`, *userID)
+	}
+	if actorID := normalizeOptionalUserID(query.ActorUserID); actorID != nil {
+		scope = scope.Where(`"billing_charge"."actor_user_id" = ?`, *actorID)
 	}
 	if userText := strings.TrimSpace(query.UserText); userText != "" {
 		matcher := "%" + userText + "%"
@@ -1464,6 +1472,13 @@ func billingBalanceQueryScope(scope *gorm.DB, query BillingBalanceQuery) *gorm.D
 			Where(`"user"."username" LIKE ? OR CAST("user"."id" AS TEXT) LIKE ?`, matcher, matcher)
 	}
 	return scope
+}
+
+func billingAPIKeyActorUserID(apiKey *APIKeyRecord) *uint {
+	if apiKey == nil {
+		return nil
+	}
+	return normalizeOptionalUserID(apiKey.CreatedByUserID)
 }
 
 func billingAPIKeyByValue(ctx context.Context, tx *gorm.DB, apiKey string) (*APIKeyRecord, error) {

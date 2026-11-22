@@ -13,7 +13,9 @@ import (
 // Local v18 and upstream v18/v19 were assigned independently; v20 merges both.
 // v21 adds user playground chat conversations.
 // v22 adds upstream usage plugin delivery tracking (upstream v20).
-const currentDatabaseVersion = 22
+// v23 adds organizations: user.kind, api_key.created_by_user_id,
+// billing_charge.actor_user_id and the organization_member table.
+const currentDatabaseVersion = 23
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -794,8 +796,14 @@ func databaseSnapshotUpstreamV18ModelRegistry() []databaseModel {
 	return withUsageModel[databaseSnapshotV19UsageRecord](databaseSnapshotV17Models)
 }
 
+// databaseSnapshotV22Models freezes the table set before organizations. The new
+// v23 columns are nullable, so v22 rows decode into the current record types.
+var databaseSnapshotV22Models = withUsageModel[UsageRecord](databaseSnapshotV21Models)
+
 func currentDatabaseModels() []databaseModel {
-	return withUsageModel[UsageRecord](databaseSnapshotV21Models)
+	return append(append([]databaseModel(nil), databaseSnapshotV22Models...),
+		newDatabaseModel[OrganizationMemberRecord]("organization_member", []string{"id"}, true, true),
+	)
 }
 
 func withUsageModel[T any](source []databaseModel) []databaseModel {
@@ -849,6 +857,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV20Models, true
 	case 21:
 		return databaseSnapshotV21Models, true
+	case 22:
+		return databaseSnapshotV22Models, true
 	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:

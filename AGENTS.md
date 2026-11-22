@@ -41,7 +41,8 @@ go build -o test-output ./cmd/home && rm test-output # Verify compile after Go c
 - `internal/registry/` - Model registry and model definition updates.
 - `internal/watcher/` - Config synthesis, file watching, and config-diff helpers.
 - `internal/access/`, `internal/node/`, `internal/logging/` - Access providers, node registry helpers, and logging/request ID support.
-- `docs/management/` - Home Management API documentation.
+- `docs/ai48home/` - AI48Home Management/User API documentation and fork-specific guides.
+- `docs/management/`, `docs/user/` - Upstream documentation; keep these paths unchanged for upstream merges.
 
 ## CPA Contract
 - Home is the center scheduler/aggregator for CPA nodes.
@@ -50,7 +51,8 @@ go build -o test-output ./cmd/home && rm test-output # Verify compile after Go c
 - Keep Home-specific implementation DB-backed. Do not reintroduce file-backed runtime writes for Management API changes.
 
 ## Documentation
-- When Management API behavior, routes, request fields, or response fields change, update `docs/management/api.md` and the matching language-specific document when applicable.
+- When Management API behavior, routes, request fields, or response fields change, update `docs/ai48home/management/api.md` and the matching language-specific document when applicable. Update User API changes under `docs/ai48home/user/`.
+- Keep AI48Home additions and overrides under `docs/ai48home/`. Do not edit `docs/management/` or `docs/user/` for fork-specific changes; those files follow upstream at their original paths to reduce merge conflicts. See `docs/README.md`.
 - Derive Management API docs from current Home route registration and handlers, not from stale narrative docs.
 - New Markdown documents should be English unless the file is explicitly language-specific.
 

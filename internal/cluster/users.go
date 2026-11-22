@@ -74,7 +74,7 @@ type UserUpdate struct {
 	WindowMode30d   *string
 }
 
-// ListUsers returns users.
+// ListUsers returns personal users; organization accounts are listed separately.
 func (r *Repository) ListUsers(ctx context.Context) ([]UserRecord, error) {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -82,7 +82,7 @@ func (r *Repository) ListUsers(ctx context.Context) ([]UserRecord, error) {
 	}
 
 	var records []UserRecord
-	if errFind := db.WithContext(contextOrBackground(ctx)).Order("id").Find(&records).Error; errFind != nil {
+	if errFind := db.WithContext(contextOrBackground(ctx)).Where("kind IS NULL OR kind <> ?", UserKindOrganization).Order("id").Find(&records).Error; errFind != nil {
 		return nil, errFind
 	}
 	return records, nil
@@ -141,8 +141,12 @@ func (r *Repository) GetUserByEmail(ctx context.Context, email string) (*UserRec
 	return record, nil
 }
 
-// CreateUser creates a user.
+// CreateUser creates a personal user.
 func (r *Repository) CreateUser(ctx context.Context, update UserUpdate) (*UserRecord, error) {
+	return r.createUserWithKind(ctx, update, UserKindPersonal)
+}
+
+func (r *Repository) createUserWithKind(ctx context.Context, update UserUpdate, kind string) (*UserRecord, error) {
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
@@ -157,6 +161,7 @@ func (r *Repository) CreateUser(ctx context.Context, update UserUpdate) (*UserRe
 
 	record := &UserRecord{
 		Username: username,
+		Kind:     kind,
 	}
 	defaultUserPeriodLimitFields(record)
 	if update.ApprovalPending != nil {
@@ -365,9 +370,16 @@ func (r *Repository) DeleteUser(ctx context.Context, id uint) error {
 		return errFirst
 	}
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Match key mutation lock ordering before deleting member-owned keys.
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
 		// Playground conversations are private user content and leave with the account.
 		if errChats := tx.Where("user_id = ?", id).Delete(&UserChatConversationRecord{}).Error; errChats != nil {
 			return errChats
+		}
+		if errOrganizations := removeUserOrganizationLinksTx(tx, id); errOrganizations != nil {
+			return errOrganizations
 		}
 		return tx.Delete(&record).Error
 	})
