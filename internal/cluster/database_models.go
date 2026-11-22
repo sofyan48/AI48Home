@@ -15,7 +15,9 @@ import (
 // v22 adds upstream usage plugin delivery tracking (upstream v20).
 // v23 adds organizations: user.kind, api_key.created_by_user_id,
 // billing_charge.actor_user_id and the organization_member table.
-const currentDatabaseVersion = 23
+// v24 ensures organization_model_groups is added to databases that already
+// completed v23 before organization model-group configuration was introduced.
+const currentDatabaseVersion = 24
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -859,7 +861,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV21Models, true
 	case 22:
 		return databaseSnapshotV22Models, true
-	case currentDatabaseVersion:
+	case 23, currentDatabaseVersion:
+		// v24 repairs the live migration gate; its portable format is unchanged.
 		return homeDatabaseModels, true
 	default:
 		return nil, false

@@ -249,6 +249,39 @@ func createOrganizationTestCharge(t *testing.T, repo *Repository, orgID, memberI
 	}
 }
 
+func TestOrganizationModelGroupsMigrationRepairsMissingColumn(t *testing.T) {
+	repo, ctx, closeRepo := newPeriodLimitTestRepo(t)
+	defer closeRepo()
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatal(errDB)
+	}
+	// Reproduce a database migrated by the initial organization release.
+	if errDrop := db.Migrator().DropColumn(&UserRecord{}, "organization_model_groups"); errDrop != nil {
+		t.Fatal(errDrop)
+	}
+	if currentDatabaseVersion <= 23 {
+		t.Fatal("organization model-group migration must advance the PostgreSQL gate past v23")
+	}
+	if errMigrate := AutoMigrate(db); errMigrate != nil {
+		t.Fatal(errMigrate)
+	}
+	if !db.Migrator().HasColumn(&UserRecord{}, "organization_model_groups") {
+		t.Fatal("migration did not restore organization_model_groups")
+	}
+	name := "personal-after-migration"
+	user, errCreate := repo.CreateUser(ctx, UserUpdate{Username: &name})
+	if errCreate != nil {
+		t.Fatalf("personal user creation after migration: %v", errCreate)
+	}
+	if user.IsOrganization() {
+		t.Fatal("personal user became an organization")
+	}
+	if _, supported := databaseSnapshotModels(23); !supported {
+		t.Fatal("v23 snapshots must remain importable")
+	}
+}
+
 func assertOrganizationKeyExists(t *testing.T, repo *Repository, value string, want bool) {
 	t.Helper()
 	db, _ := repo.database()
