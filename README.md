@@ -112,6 +112,23 @@ pulls the configured GHCR images; it does not build AI48Proxy locally. Keep
 For source reload during development, use the separate development Compose
 instructions below.
 
+AI48Proxy is not a drop-in CLIProxyAPI replacement. Native plugins and
+plugin-provided executors are not supported. The production installer explicitly
+sets `plugins.enabled: false` in new bootstrap configuration and disables/verifies
+plugins in Home's database before starting workers during deploy, start, restart,
+upgrade, and repair. Helm worker bootstrap applies the same check, including when
+reusing an existing identity. This global change also affects Home and other CPA
+workers sharing it; use a separate Home if they still require plugins. Do not
+re-enable plugins while AI48Proxy is connected. Direct Compose startup bypasses
+the installer guard.
+
+Before migrating production traffic, back up the database and identities, review
+AI48Proxy's [configuration compatibility](https://github.com/sofyan48/AI48Proxy/blob/main/docs/config-sync-matrix.md)
+and [acceptance runbook](https://github.com/sofyan48/AI48Proxy/blob/main/docs/worker-acceptance.md),
+and verify actual provider requests, streaming, tool calls, usage, and request
+logs. Do not import a fresh configuration over an existing production database
+or delete old worker volumes as a migration shortcut.
+
 `install.sh` stores the Home image in `/opt/cliproxy-cluster/.env` as `HOME_IMAGE` and the worker image as `AI48PROXY_IMAGE`. Both images are pulled from GHCR; no worker image is built locally. Pin them before `deploy`, for example:
 
 ```bash

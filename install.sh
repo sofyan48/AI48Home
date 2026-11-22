@@ -129,6 +129,30 @@ wait_for_home() {
   fail "AI48Home did not become ready."
 }
 
+ensure_plugins_disabled() {
+  local management_key="$1" enabled
+  enabled="$(curl -fsS --connect-timeout 5 --max-time 30 \
+    -H "X-MANAGEMENT-KEY: ${management_key}" \
+    http://127.0.0.1:8327/v8/management/plugins | jq -er '.plugins_enabled | tostring')"
+  case "$enabled" in
+    false) return 0 ;;
+    true)
+      log "Disabling Home plugins in the database: AI48Proxy does not support plugin execution"
+      curl -fsS --connect-timeout 5 --max-time 30 -X PATCH \
+        -H "X-MANAGEMENT-KEY: ${management_key}" \
+        -H 'Content-Type: application/json' \
+        --data '{"plugins":{"enabled":false}}' \
+        http://127.0.0.1:8327/v8/management/config >/dev/null
+      ;;
+    *) fail "Cannot verify Home plugin state; refusing to start AI48Proxy." ;;
+  esac
+  curl -fsS --connect-timeout 5 --max-time 30 \
+    -H "X-MANAGEMENT-KEY: ${management_key}" \
+    http://127.0.0.1:8327/v8/management/plugins \
+    | jq -e '.plugins_enabled == false' >/dev/null \
+    || fail "Home plugins must be disabled before starting AI48Proxy."
+}
+
 generate_home_jwt() {
   local management_key="$1"
 
@@ -190,6 +214,8 @@ api-keys:
   - "${gateway_api_key}"
 
 debug: false
+plugins:
+  enabled: false
 EOF_CONFIG
 
   cat > "$BASE_DIR/cluster.yaml" <<EOF_CLUSTER
@@ -453,6 +479,7 @@ start_cluster() {
   log "Starting AI48Home"
   compose up -d ai48home
   wait_for_home "$management_key"
+  ensure_plugins_disabled "$management_key"
 
   log "Starting workers and Nginx"
   compose up -d ai48proxy-1 ai48proxy-2 ai48proxy-3 nginx
@@ -486,6 +513,7 @@ restart_cluster() {
   wait_for_postgres
   compose restart ai48home
   wait_for_home "$management_key"
+  ensure_plugins_disabled "$management_key"
 
   log "Starting workers; the startup delay prevents active membership conflicts"
   compose up -d ai48proxy-1 ai48proxy-2 ai48proxy-3 nginx
@@ -521,8 +549,10 @@ upgrade_home() {
   compose pull ai48home ai48proxy-1 ai48proxy-2 ai48proxy-3
 
   log "Replacing Home and worker containers (identities are preserved)"
-  compose up -d --no-deps ai48home ai48proxy-1 ai48proxy-2 ai48proxy-3
+  compose up -d --no-deps ai48home
   wait_for_home "$management_key"
+  ensure_plugins_disabled "$management_key"
+  compose up -d --no-deps ai48proxy-1 ai48proxy-2 ai48proxy-3
 
   compose ps ai48home ai48proxy-1 ai48proxy-2 ai48proxy-3
 }
@@ -553,6 +583,8 @@ repair_worker() {
     wait_for_postgres
     wait_for_home "$management_key"
   fi
+
+  ensure_plugins_disabled "$management_key"
 
   log "Generating a new JWT/certificate for worker ${worker_number}"
   new_jwt="$(generate_home_jwt "$management_key")"
@@ -619,6 +651,7 @@ EOF_ENV
 
   log "Initializing AI48Home"
   ensure_home_initialized "$management_key"
+  ensure_plugins_disabled "$management_key"
 
   ensure_worker_jwts "$management_key"
 

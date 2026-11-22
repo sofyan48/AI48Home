@@ -31,6 +31,26 @@ def main():
             pass
         time.sleep(min(2, max(0, deadline - time.monotonic())))
 
+    # Check database-backed config even when reusing an existing identity.
+    request = urllib.request.Request(home + "/v8/management/plugins", headers=headers)
+    with urllib.request.urlopen(request, timeout=15) as response:
+        enabled = json.load(response).get("plugins_enabled")
+    if enabled is True:
+        print("Disabling Home plugins: AI48Proxy does not support plugin execution", flush=True)
+        request = urllib.request.Request(
+            home + "/v8/management/config",
+            headers={**headers, "Content-Type": "application/json"},
+            data=b'{"plugins":{"enabled":false}}',
+            method="PATCH",
+        )
+        with urllib.request.urlopen(request, timeout=15):
+            pass
+        request = urllib.request.Request(home + "/v8/management/plugins", headers=headers)
+        with urllib.request.urlopen(request, timeout=15) as response:
+            enabled = json.load(response).get("plugins_enabled")
+    if enabled is not False:
+        raise RuntimeError("Home plugins must be disabled before starting AI48Proxy")
+
     token_path = identity / ".home-jwt"
     if token_path.exists():
         if not os.access(token_path, os.R_OK):

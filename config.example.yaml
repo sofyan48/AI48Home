@@ -1390,6 +1390,7 @@ observability:
 # Other languages can implement the same C ABI and JSON method protocol.
 # Per-plugin enabled only controls plugins.configs.<pluginID>.enabled and does not implicitly change global plugins.enabled.
 plugins:
+  # Disabled by default. Keep disabled when using AI48Proxy workers.
   enabled: false
   dir: "plugins"
   # Additional plugin store registries. The built-in official registry is always included.
@@ -1400,7 +1401,7 @@ plugins:
   # or auth-revision here; Home projects them to downstream nodes at runtime.
   configs:
     example:
-      enabled: true
+      enabled: false
       priority: 1
       config1: true
       config2: "string"
