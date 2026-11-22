@@ -286,6 +286,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `DELETE` | `/organizations/:id/members/:user_id` |
 | `GET` | `/organizations/:id/api-keys` |
 | `POST` | `/organizations/:id/api-keys` |
+| `PATCH` | `/organizations/:id/api-keys/:key_id` |
 | `DELETE` | `/organizations/:id/api-keys/:key_id` |
 
 ## 配置接口
@@ -1364,7 +1365,7 @@ HTTP 200 返回 `{"user": <管理用户对象>}`。用户列表/详情对象及�
 
 准入顺序：组织余额 → 组织周期限额 → Key 所属者仍是成员 → 成员消费限额（`5h`/`1d`/`7d`/`30d`）。成员窗口模式 `window_mode_*` 支持 `sliding`（默认）、`first_use` 与 `calendar`（`5h` 不支持；按组织时区与周重置设置计算）。成员限额不得高于组织同一窗口的限额（400，`exceeds_organization_limit`）。`allow_member_keys`（默认 `true`）为 `false` 时，普通成员不能自行创建组织 Key，由 owner 或管理员代为创建。成员 `model_groups` 必须是组织模型组的子集（`[]` 继承组织），修改后会同步到该成员已有的组织 Key；缩小组织模型组时会裁剪成员子集，若导致某成员子集为空则返回 409 `member_model_groups_conflict`。`max_api_keys` 限制成员的组织 Key 数量（`null` 不限），超出返回 409 `member_key_limit`，个人 Key 不计入。超限沿用 `user_period_limit_exceeded`（HTTP 429），非成员 Key 返回 `permission_denied`。充值沿用现有账单接口，以组织 ID 作为 `user_id`。
 
-接口：`GET/POST /organizations`、`GET/PATCH/DELETE /organizations/:id`、`POST /organizations/:id/members`、`PATCH/DELETE /organizations/:id/members/:user_id`、`GET/POST /organizations/:id/api-keys`、`DELETE /organizations/:id/api-keys/:key_id`、`GET /users/:id/organizations`。字段与英文文档 `api.md` 的 Organizations 章节一致。
+接口：`GET/POST /organizations`、`GET/PATCH/DELETE /organizations/:id`、`POST /organizations/:id/members`、`PATCH/DELETE /organizations/:id/members/:user_id`、`GET/POST /organizations/:id/api-keys`、`PATCH/DELETE /organizations/:id/api-keys/:key_id`（`PATCH` 仅重命名 `display_name`，`null` 清空名称）、`GET /users/:id/organizations`。字段与英文文档 `api.md` 的 Organizations 章节一致。
 
 ## 客户端 API Keys
 
@@ -1663,7 +1664,8 @@ Query 参数：
 | `to` | string | 可选排他结束时间；纯日期通过使用下一个本地零点，完整包含 `timezone` 中的结束日期。 |
 | `timezone` | string | 可选的 IANA 报表时区覆盖，用于纯日期边界、响应范围日期和每日趋势分桶；默认使用 `/billing/settings.report_timezone`。 |
 | `user` | string | 可选用户名、用户文本或用户 ID 过滤；别名：`user_text`、`username`。 |
-| `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。 |
+| `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。也接受组织 ID，用于筛选组织扣费。 |
+| `actor_user_id` | integer | 可选组织成员过滤（产生扣费的成员 key 所属用户）。 |
 | `provider` | string | 可选 provider 过滤。 |
 | `model` | string | 可选 model 过滤。 |
 
@@ -1702,7 +1704,8 @@ Query 参数：
 | `to` | string | 可选排他结束时间；纯日期通过使用下一个本地零点，完整包含 `timezone` 中的结束日期。 |
 | `timezone` | string | 可选的 IANA 报表时区覆盖，用于纯日期边界；默认使用 `/billing/settings.report_timezone`。 |
 | `user` | string | 可选用户名、用户文本或用户 ID 过滤；别名：`user_text`、`username`。 |
-| `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。 |
+| `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。也接受组织 ID，用于筛选组织扣费。 |
+| `actor_user_id` | integer | 可选组织成员过滤（产生扣费的成员 key 所属用户）。 |
 | `provider` | string | 可选 provider 过滤。 |
 | `model` | string | 可选 model 过滤。 |
 | `cost_diagnostic` | string | 可选零费用诊断过滤：`unpriced_model`、`zero_price`，或 `any` 表示所有被标记的 charge。 |
@@ -3059,6 +3062,8 @@ Home 管理的 CPA 使用数据库支持的 observation 配置。`credentials.in
 | `capabilities.model_channel_bindings` | boolean | model group detail 是否支持通过 `channels` 配置模型级 channel group 绑定。 |
 | `capabilities.topology` | boolean | 是否支持 `GET /topology` Home + CPA 集群拓扑接口。 |
 | `capabilities.users` | boolean | 是否支持 `/users` 用户管理路由。 |
+| `capabilities.organization_api_key_rename` | boolean | 是否支持 `PATCH /organizations/:id/api-keys/:key_id` 重命名组织 key。 |
+| `capabilities.organization_usage_filters` | boolean | billing 与 usage 路由是否支持组织筛选：`/billing/overview`、`/billing/charges`、`/usage/*`、`/request-events*` 接受 `user_id=<组织 ID>` 与 `actor_user_id=<成员 ID>`。 |
 | `capabilities.topup_approval` | boolean | 自助充值需要批准，支持待批准用户字段和 `/users/:id/topup/approve`；用户能力 API 也声明此字段。 |
 | `capabilities.access_groups` | boolean | 是否支持 `/channel-groups` 与 `/model-groups` 访问范围路由。 |
 | `capabilities.channel_group_credential_candidates` | boolean | 添加凭证范围绑定时可读取轻量候选列表。 |
@@ -3348,6 +3353,8 @@ usage 活动归属于通过 `auth_index` 解析出的当前 DB 凭证，因此�
 | `credential_type` | string | 无 | 执行凭证类型：`provider_api_key`、`oauth`、`file_auth`、`vertex`、`unknown`。 |
 | `home_ip` | string | 无 | Home 节点 IP。 |
 | `endpoint` | string | 无 | endpoint 模糊筛选。 |
+| `user_id` | integer | 无 | 计费归属过滤：个人用户 ID 或组织 ID。优先匹配扣费归属，未计费的 usage 回退到客户端 key 归属。 |
+| `actor_user_id` | integer | 无 | 组织成员过滤；与 `user_id=<组织 ID>` 组合可筛选组织内某个成员。 |
 
 金额字段使用当前 Home billing 系统中的 credits/points 口径。启用 billing 且 usage 可归因到 `billing_charge` 时，`amount` 或 `total_amount` 返回数值，`currency` 返回 `credits`，`billing_basis` 返回 `billing_charge`；无法可靠归因时金额返回 `null`，不会伪造估算金额。
 
@@ -3415,7 +3422,8 @@ Query 参数：
 | `session_id` / `parent_session_id` / `root_session_id` | string | 无 | 会话层级筛选（支持原始会话名与确定性规范化 canonical UUIDv8 双向容错匹配）。 |
 | `event_type` | string | 无 | 事件类型筛选，常见值为 `completion`、`response`、`message`、`embedding`、`stream`。 |
 | `cpa_node` | string | 无 | 按结构化 CPA node ID、CPA IP、CPA label、CPA port 做模糊筛选。 |
-| `user` / `user_id` | string / integer | 无 | 用户名或用户 ID。 |
+| `user` / `user_id` | string / integer | 无 | 用户名或用户 ID；`user_id` 也接受组织 ID。 |
+| `actor_user_id` | integer | 无 | 产生扣费的组织成员。 |
 | `client_key` / `client_key_id` | string / integer | 无 | client access key 的 masked/label/ID 筛选。 |
 | `credential_id` / `auth_index` | string | 无 | 执行凭证筛选。 |
 | `executor_type` | string | 无 | executor type 精确筛选。 |
@@ -3501,6 +3509,8 @@ Query 参数：
 | `cpa_node` | string | 无 | 按结构化 CPA node ID、CPA IP、CPA label、CPA port 做模糊筛选；CPA payload 未上报时，Home 会尽量从可信 RESP/mTLS 运行时身份补齐。 |
 | `credential_id` / `auth_index` | string | 无 | 执行凭证筛选。 |
 | `user` | string | 无 | 用户名或用户 ID 搜索。 |
+| `user_id` | integer | 无 | 精确计费归属：个人用户 ID 或组织 ID。 |
+| `actor_user_id` | integer | 无 | 产生扣费的组织成员。 |
 | `client_key` | string | 无 | client access key 的 masked/label/ID 搜索。 |
 | `min_latency_ms` / `max_latency_ms` | integer | 无 | 延迟范围。 |
 

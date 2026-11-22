@@ -198,6 +198,8 @@ type BillingOverviewQuery struct {
 	Timezone    string
 	UserText    string
 	UserID      *uint
+	// ActorUserID narrows organization charges to one member.
+	ActorUserID *uint
 	Provider    string
 	Model       string
 }
@@ -1170,6 +1172,7 @@ func billingChargeQueryFromOverview(query BillingOverviewQuery) BillingChargeQue
 		ToExclusive: query.ToExclusive,
 		UserText:    query.UserText,
 		UserID:      query.UserID,
+		ActorUserID: query.ActorUserID,
 		Provider:    query.Provider,
 		Model:       query.Model,
 	}

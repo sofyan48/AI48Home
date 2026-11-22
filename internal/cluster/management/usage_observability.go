@@ -79,6 +79,8 @@ func (h *Handler) GetCapabilities(c *gin.Context) {
 			"topology":                             true,
 			"users":                                true,
 			"organizations":                        true,
+			"organization_usage_filters":           true,
+			"organization_api_key_rename":          true,
 			"access_groups":                        true,
 			"channel_group_credential_candidates":  true,
 			"user_period_limits":                   true,
@@ -324,6 +326,8 @@ func (h *Handler) GetUsageRealtime(c *gin.Context) {
 		HomeIP:         query.HomeIP,
 		Endpoint:       query.Endpoint,
 		CredentialType: query.CredentialType,
+		UserID:         query.UserID,
+		ActorUserID:    query.ActorUserID,
 		GroupBy:        query.GroupBy,
 		BucketSeconds:  query.BucketSeconds,
 	})
@@ -431,6 +435,8 @@ func (h *Handler) getUsageHealth(c *gin.Context, subject string) {
 		HomeIP:         query.HomeIP,
 		Endpoint:       query.Endpoint,
 		CredentialType: query.CredentialType,
+		UserID:         query.UserID,
+		ActorUserID:    query.ActorUserID,
 		GroupBy:        groupBy,
 		Metric:         "failed_count",
 		Direction:      "desc",
@@ -448,6 +454,8 @@ func (h *Handler) getUsageHealth(c *gin.Context, subject string) {
 		HomeIP:         query.HomeIP,
 		Endpoint:       query.Endpoint,
 		CredentialType: query.CredentialType,
+		UserID:         query.UserID,
+		ActorUserID:    query.ActorUserID,
 	}, subject)
 	if errDetails != nil {
 		respondError(c, http.StatusInternalServerError, "usage_health_records_load_failed", errDetails)
@@ -496,6 +504,7 @@ type usageRecordHTTPQuery struct {
 	RootSessionID   string
 	User            string
 	UserID          *uint
+	ActorUserID     *uint
 	ClientKey       string
 	ClientKeyID     *uint
 	CredentialID    string
@@ -521,6 +530,8 @@ type usageAggregateHTTPQuery struct {
 	HomeIP         string
 	Endpoint       string
 	CredentialType string
+	UserID         *uint
+	ActorUserID    *uint
 	Timezone       string
 	GroupBy        string
 	Metric         string
@@ -537,6 +548,8 @@ type usageOverviewHTTPQuery struct {
 	HomeIP         string
 	Endpoint       string
 	CredentialType string
+	UserID         *uint
+	ActorUserID    *uint
 	Timezone       string
 	Interval       string
 }
@@ -549,6 +562,8 @@ type usageRealtimeHTTPQuery struct {
 	HomeIP         string
 	Endpoint       string
 	CredentialType string
+	UserID         *uint
+	ActorUserID    *uint
 	Timezone       string
 	WindowSeconds  int
 	BucketSeconds  int
@@ -563,6 +578,8 @@ type usageHealthHTTPQuery struct {
 	HomeIP         string
 	Endpoint       string
 	CredentialType string
+	UserID         *uint
+	ActorUserID    *uint
 	Timezone       string
 	WindowSeconds  int
 }
@@ -663,7 +680,12 @@ func parseUsageRecordHTTPQueryWithPagination(c *gin.Context, includePagination b
 	if errClientKeyID != nil {
 		return query, errClientKeyID
 	}
+	actorUserID, errActorUserID := optionalUint(c.Query("actor_user_id"), "actor_user_id")
+	if errActorUserID != nil {
+		return query, errActorUserID
+	}
 	query.UserID = userID
+	query.ActorUserID = actorUserID
 	query.ClientKeyID = clientKeyID
 	query.CredentialID = strings.TrimSpace(c.Query("credential_id"))
 	query.AuthIndex = strings.TrimSpace(c.Query("auth_index"))
@@ -729,6 +751,12 @@ func parseUsageAggregateHTTPQuery(c *gin.Context) (usageAggregateHTTPQuery, *usa
 		return query, errCredentialType
 	}
 	query.CredentialType = credentialType
+	userID, actorUserID, errOwner := parseUsageOwnerQuery(c)
+	if errOwner != nil {
+		return query, errOwner
+	}
+	query.UserID = userID
+	query.ActorUserID = actorUserID
 	query.GroupBy = groupBy
 	query.Metric = metric
 	query.Direction = direction
@@ -762,6 +790,12 @@ func parseUsageOverviewHTTPQuery(c *gin.Context) (usageOverviewHTTPQuery, *usage
 		return query, errCredentialType
 	}
 	query.CredentialType = credentialType
+	userID, actorUserID, errOwner := parseUsageOwnerQuery(c)
+	if errOwner != nil {
+		return query, errOwner
+	}
+	query.UserID = userID
+	query.ActorUserID = actorUserID
 	query.Timezone = timezone
 	interval, errInterval := parseUsageInterval(c.Query("interval"))
 	if errInterval != nil {
@@ -807,6 +841,12 @@ func parseUsageRealtimeHTTPQuery(c *gin.Context) (usageRealtimeHTTPQuery, *usage
 		return query, errCredentialType
 	}
 	query.CredentialType = credentialType
+	userID, actorUserID, errOwner := parseUsageOwnerQuery(c)
+	if errOwner != nil {
+		return query, errOwner
+	}
+	query.UserID = userID
+	query.ActorUserID = actorUserID
 	return query, nil
 }
 
@@ -829,6 +869,12 @@ func parseUsageHealthHTTPQuery(c *gin.Context) (usageHealthHTTPQuery, *usageHTTP
 		return query, errCredentialType
 	}
 	query.CredentialType = credentialType
+	userID, actorUserID, errOwner := parseUsageOwnerQuery(c)
+	if errOwner != nil {
+		return query, errOwner
+	}
+	query.UserID = userID
+	query.ActorUserID = actorUserID
 	return query, nil
 }
 
@@ -1105,6 +1151,19 @@ func optionalNonNegativeFloat64(raw string, field string) (*float64, *usageHTTPE
 	return &parsed, nil
 }
 
+// parseUsageOwnerQuery reads the billed-owner (user or organization) and organization-member filters.
+func parseUsageOwnerQuery(c *gin.Context) (*uint, *uint, *usageHTTPError) {
+	userID, errUserID := optionalUint(c.Query("user_id"), "user_id")
+	if errUserID != nil {
+		return nil, nil, errUserID
+	}
+	actorUserID, errActorUserID := optionalUint(c.Query("actor_user_id"), "actor_user_id")
+	if errActorUserID != nil {
+		return nil, nil, errActorUserID
+	}
+	return userID, actorUserID, nil
+}
+
 func optionalUint(raw string, field string) (*uint, *usageHTTPError) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
@@ -1152,6 +1211,7 @@ func usageObservabilityRecordQueryFromHTTP(query usageRecordHTTPQuery) cluster.U
 		RootSessionID:   query.RootSessionID,
 		User:            query.User,
 		UserID:          query.UserID,
+		ActorUserID:     query.ActorUserID,
 		ClientKey:       query.ClientKey,
 		ClientKeyID:     query.ClientKeyID,
 		CredentialID:    query.CredentialID,
@@ -1179,6 +1239,8 @@ func usageObservabilityAggregateQueryFromHTTP(query usageAggregateHTTPQuery) clu
 		HomeIP:         query.HomeIP,
 		Endpoint:       query.Endpoint,
 		CredentialType: query.CredentialType,
+		UserID:         query.UserID,
+		ActorUserID:    query.ActorUserID,
 		GroupBy:        query.GroupBy,
 		Metric:         query.Metric,
 		Direction:      query.Direction,
@@ -1196,6 +1258,8 @@ func usageObservabilityOverviewQueryFromHTTP(query usageOverviewHTTPQuery) clust
 		HomeIP:         query.HomeIP,
 		Endpoint:       query.Endpoint,
 		CredentialType: query.CredentialType,
+		UserID:         query.UserID,
+		ActorUserID:    query.ActorUserID,
 		Timezone:       query.Timezone,
 		Interval:       query.Interval,
 	}

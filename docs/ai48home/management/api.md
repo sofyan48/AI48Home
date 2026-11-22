@@ -287,6 +287,7 @@ The following v8 routes are derived from `internal/managementhttp/routes_v8.go` 
 | `DELETE` | `/organizations/:id/members/:user_id` |
 | `GET` | `/organizations/:id/api-keys` |
 | `POST` | `/organizations/:id/api-keys` |
+| `PATCH` | `/organizations/:id/api-keys/:key_id` |
 | `DELETE` | `/organizations/:id/api-keys/:key_id` |
 
 ## Configuration Endpoints
@@ -1427,7 +1428,15 @@ Returns `{"api_keys": [{id, api_key, display_name, created_by_user_id, created_a
 { "member_user_id": 12, "display_name": "ci" }
 ```
 
-`member_user_id` is required and must be a member. `api_key` is optional; a value is generated when omitted. The key uses the member's `model_groups` subset when set, otherwise the organization model groups. Returns 409 `member_key_limit` when the member reached `max_api_keys`.
+`member_user_id` is required and must be a member. `display_name` is optional (trimmed, at most 128 characters, no control characters). `api_key` is optional; a value is generated when omitted. The key uses the member's `model_groups` subset when set, otherwise the organization model groups. Returns 409 `member_key_limit` when the member reached `max_api_keys`.
+
+### PATCH `/organizations/:id/api-keys/:key_id`
+
+```json
+{ "display_name": "deploy bot" }
+```
+
+Renames one organization key. `display_name` is required; `null` or an empty string clears the name. The key value, owner, and routing scope are unchanged. Returns `{"api_key": {...}}` with the same fields as the list, 400 for an invalid name, and 404 when the key does not belong to the organization. Advertised by `capabilities.organization_api_key_rename`.
 
 ### DELETE `/organizations/:id/api-keys/:key_id`
 
@@ -1734,7 +1743,8 @@ Query parameters:
 | `to` | string | Optional exclusive end time. Date-only values include the full ending day in `timezone` by using the next local midnight. |
 | `timezone` | string | Optional IANA reporting-timezone override for date-only boundaries, response range dates, and daily trend buckets. Defaults to `/billing/settings.report_timezone`. |
 | `user` | string | Optional username, user text, or user ID filter. Aliases: `user_text`, `username`. |
-| `user_id` | integer | Optional exact user ID filter. Alias: `uid`. |
+| `user_id` | integer | Optional exact user ID filter. Alias: `uid`. Accepts an organization ID to scope organization charges. |
+| `actor_user_id` | integer | Optional organization member filter (the member whose key produced the charge). |
 | `provider` | string | Optional provider filter. |
 | `model` | string | Optional model filter. |
 
@@ -1773,7 +1783,8 @@ Query parameters:
 | `to` | string | Optional exclusive end time. Date-only values include the full ending day in `timezone` by using the next local midnight. |
 | `timezone` | string | Optional IANA reporting-timezone override for date-only boundaries. Defaults to `/billing/settings.report_timezone`. |
 | `user` | string | Optional username, user text, or user ID filter. Aliases: `user_text`, `username`. |
-| `user_id` | integer | Optional exact user ID filter. Alias: `uid`. |
+| `user_id` | integer | Optional exact user ID filter. Alias: `uid`. Accepts an organization ID to scope organization charges. |
+| `actor_user_id` | integer | Optional organization member filter (the member whose key produced the charge). |
 | `provider` | string | Optional provider filter. |
 | `model` | string | Optional model filter. |
 | `cost_diagnostic` | string | Optional zero-cost diagnostic filter: `unpriced_model`, `zero_price`, or `any` for every flagged charge. |
@@ -3142,6 +3153,8 @@ Response fields:
 | `capabilities.model_channel_bindings` | boolean | Whether model group details support model-specific channel group bindings through `channels`. |
 | `capabilities.topology` | boolean | Whether `GET /topology` is available for Home + CPA cluster topology. |
 | `capabilities.users` | boolean | Whether the `/users` user-management routes are available. |
+| `capabilities.organization_api_key_rename` | boolean | Whether `PATCH /organizations/:id/api-keys/:key_id` renames organization keys. |
+| `capabilities.organization_usage_filters` | boolean | Whether billing and usage routes accept organization scoping: `user_id=<organization id>` plus `actor_user_id=<member id>` on `/billing/overview`, `/billing/charges`, `/usage/*`, and `/request-events*`. |
 | `capabilities.topup_approval` | boolean | Self-topups require approval; pending user maps and `/users/:id/topup/approve` are available. Also advertised by the User API. |
 | `capabilities.access_groups` | boolean | Whether the `/channel-groups` and `/model-groups` access-scope routes are available. |
 | `capabilities.channel_group_credential_candidates` | boolean | Whether the binding editor can read the lightweight credential candidate list. |
@@ -3432,6 +3445,8 @@ The aggregate range parameters apply to `/usage/overview`, `/usage/aggregates`, 
 | `credential_type` | string | none | Execution credential type: `provider_api_key`, `oauth`, `file_auth`, `vertex`, or `unknown`. |
 | `home_ip` | string | none | Home node IP. |
 | `endpoint` | string | none | Fuzzy endpoint filter. |
+| `user_id` | integer | none | Billed owner filter: a personal user ID or an organization ID. Matches the charge owner, falling back to the client key owner for unbilled usage. |
+| `actor_user_id` | integer | none | Organization member filter. Matches usage whose charge `actor_user_id` is this member; combine with `user_id=<organization id>` to scope one member inside one organization. |
 
 Amount fields use the current Home billing credit/point unit. When billing is enabled and usage can be attributed to `billing_charge`, `amount` or `total_amount` returns a number, `currency` returns `credits`, and `billing_basis` returns `billing_charge`. When attribution is not reliable, amount fields return `null`; the API does not fabricate estimated charges.
 
@@ -3499,7 +3514,8 @@ Query parameters:
 | `session_id` / `parent_session_id` / `root_session_id` | string | none | Session hierarchy filter for turn, parent task, or root workflow. Matches both raw identifiers and canonical UUIDv8 projections. |
 | `event_type` | string | none | Normalized event type filter. Common values include `completion`, `response`, `message`, `embedding`, and `stream`. |
 | `cpa_node` | string | none | Fuzzy filter across structured CPA node ID, CPA IP, CPA label, and CPA port. |
-| `user` / `user_id` | string / integer | none | Username or user ID. |
+| `user` / `user_id` | string / integer | none | Username or user ID. `user_id` also accepts an organization ID. |
+| `actor_user_id` | integer | none | Organization member whose key produced the charge. |
 | `client_key` / `client_key_id` | string / integer | none | Client access key masked value, label, or ID. |
 | `credential_id` / `auth_index` | string | none | Execution credential filter. |
 | `executor_type` | string | none | Exact executor type filter. |
@@ -3585,6 +3601,8 @@ Query parameters:
 | `cpa_node` | string | none | Fuzzy filter across structured CPA node ID, CPA IP, CPA label, and CPA port. Home fills missing CPA node ID/IP from the trusted RESP/mTLS runtime identity when available. |
 | `credential_id` / `auth_index` | string | none | Execution credential filter. |
 | `user` | string | none | Username or user ID search. |
+| `user_id` | integer | none | Exact billed owner: personal user ID or organization ID. |
+| `actor_user_id` | integer | none | Organization member whose key produced the charge. |
 | `client_key` | string | none | Client access key masked value, label, or ID search. |
 | `min_latency_ms` / `max_latency_ms` | integer | none | Latency range. |
 

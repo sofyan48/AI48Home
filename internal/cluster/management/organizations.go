@@ -1,6 +1,7 @@
 package management
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -42,6 +43,11 @@ type organizationMemberWriteRequest struct {
 	WindowMode30d *string           `json:"window_mode_30d"`
 	ModelGroups   *[]uint           `json:"model_groups"`
 	MaxAPIKeys    optionalJSONFloat `json:"max_api_keys"`
+}
+
+// organizationAPIKeyRenameRequest keeps display_name raw so null clears the name.
+type organizationAPIKeyRenameRequest struct {
+	DisplayName json.RawMessage `json:"display_name"`
 }
 
 type organizationAPIKeyWriteRequest struct {
@@ -366,6 +372,48 @@ func (h *Handler) CreateOrganizationAPIKey(c *gin.Context) {
 	})
 	if errCreate != nil {
 		respondOrganizationError(c, "organization_api_key_create_failed", errCreate)
+		return
+	}
+	if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
+		respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"api_key": organizationAPIKeyResponse(record)})
+}
+
+// UpdateOrganizationAPIKey renames one organization key. Routing and owner stay unchanged.
+func (h *Handler) UpdateOrganizationAPIKey(c *gin.Context) {
+	id, ok := organizationIDFromParam(c)
+	if !ok {
+		return
+	}
+	keyID, errKeyID := strconv.ParseUint(strings.TrimSpace(c.Param("key_id")), 10, 64)
+	if errKeyID != nil || keyID == 0 {
+		respondError(c, http.StatusBadRequest, "invalid id", fmt.Errorf("invalid api key id"))
+		return
+	}
+	var body organizationAPIKeyRenameRequest
+	if errBind := c.ShouldBindJSON(&body); errBind != nil {
+		respondError(c, http.StatusBadRequest, "invalid body", errBind)
+		return
+	}
+	if len(body.DisplayName) == 0 {
+		respondErrorWithFieldErrors(c, http.StatusBadRequest, "invalid body", errRequired("display_name"), []fieldErrorItem{{Field: "display_name", Code: "required"}})
+		return
+	}
+	var displayName *string
+	if errName := json.Unmarshal(body.DisplayName, &displayName); errName != nil {
+		respondError(c, http.StatusBadRequest, "invalid body", errName)
+		return
+	}
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	record, errUpdate := h.repo.UpdateOrganizationAPIKey(ctx, cluster.OrganizationAPIKeyScope{OrgID: id}, uint(keyID), cluster.APIKeyUserUpdate{
+		DisplayName:    displayName,
+		DisplayNameSet: true,
+	})
+	if errUpdate != nil {
+		respondOrganizationError(c, "organization_api_key_update_failed", errUpdate)
 		return
 	}
 	if errRefresh := h.refreshConfig(ctx); errRefresh != nil {

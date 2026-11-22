@@ -665,12 +665,17 @@ func billingOverviewQueryFromRequest(c *gin.Context, defaultTimezone string) (cl
 	if !ok {
 		return cluster.BillingOverviewQuery{}, false
 	}
+	actorUserID, ok := billingUintQuery(c, "actor_user_id")
+	if !ok {
+		return cluster.BillingOverviewQuery{}, false
+	}
 	return cluster.BillingOverviewQuery{
 		From:        from,
 		ToExclusive: to,
 		Timezone:    timezone,
 		UserText:    firstNonEmptyQuery(c, "user", "user_text", "username"),
 		UserID:      userID,
+		ActorUserID: actorUserID,
 		Provider:    firstNonEmptyQuery(c, "provider"),
 		Model:       firstNonEmptyQuery(c, "model"),
 	}, true
@@ -685,6 +690,10 @@ func billingChargeQueryFromRequest(c *gin.Context, defaultTimezone string) (clus
 	if !ok {
 		return cluster.BillingChargeQuery{}, false
 	}
+	actorUserID, ok := billingUintQuery(c, "actor_user_id")
+	if !ok {
+		return cluster.BillingChargeQuery{}, false
+	}
 	limit, offset, ok := billingPaginationQuery(c)
 	if !ok {
 		return cluster.BillingChargeQuery{}, false
@@ -694,6 +703,7 @@ func billingChargeQueryFromRequest(c *gin.Context, defaultTimezone string) (clus
 		ToExclusive:    to,
 		UserText:       firstNonEmptyQuery(c, "user", "user_text", "username"),
 		UserID:         userID,
+		ActorUserID:    actorUserID,
 		Provider:       firstNonEmptyQuery(c, "provider"),
 		Model:          firstNonEmptyQuery(c, "model"),
 		CostDiagnostic: firstNonEmptyQuery(c, "cost_diagnostic"),

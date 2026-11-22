@@ -249,6 +249,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodDelete, "/organizations/:id/members/:user_id", handler.RemoveOrganizationMember)
 	r.Set(http.MethodGet, "/organizations/:id/api-keys", handler.ListOrganizationAPIKeys)
 	r.Set(http.MethodPost, "/organizations/:id/api-keys", handler.CreateOrganizationAPIKey)
+	r.Set(http.MethodPatch, "/organizations/:id/api-keys/:key_id", handler.UpdateOrganizationAPIKey)
 	r.Set(http.MethodDelete, "/organizations/:id/api-keys/:key_id", handler.DeleteOrganizationAPIKey)
 	r.Set(http.MethodGet, "/channel-groups", handler.ListChannelGroups)
 	r.Set(http.MethodPost, "/channel-groups", handler.CreateChannelGroup)
