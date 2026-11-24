@@ -1,4 +1,7 @@
 docs/*
+!docs/README.md
+!docs/ai48home/
+!docs/ai48home/**
 !docs/management/
 !docs/management/**
 !docs/user/
@@ -39,8 +42,17 @@ plugins
 .gemini/*
 .worktrees/
 .superpowers/
-.air.toml
 tmp/
 
 helm/*.tgz
 helm/values.yml
+
+# Local development support files and runtime state
+/cluster.dev.yaml
+/config.dev.yaml
+/home.jwt
+/logs.dev/
+/plugins.dev/
+/dev/
+.air.toml
+/air_errors.log

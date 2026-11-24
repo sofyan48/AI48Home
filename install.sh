@@ -98,7 +98,7 @@ home_is_ready() {
     --connect-timeout 2 \
     --max-time 5 \
     -H "X-MANAGEMENT-KEY: ${management_key}" \
-    http://127.0.0.1:8327/v0/management/nodes >/dev/null 2>&1
+    http://127.0.0.1:8327/v8/management/nodes >/dev/null 2>&1
 }
 
 wait_for_home_seconds() {
@@ -125,15 +125,39 @@ wait_for_home() {
     return 0
   fi
 
-  compose logs --tail=150 home || true
+  compose logs --tail=150 ai48home || true
   fail "AI48Home did not become ready."
+}
+
+ensure_plugins_disabled() {
+  local management_key="$1" enabled
+  enabled="$(curl -fsS --connect-timeout 5 --max-time 30 \
+    -H "X-MANAGEMENT-KEY: ${management_key}" \
+    http://127.0.0.1:8327/v8/management/plugins | jq -er '.plugins_enabled | tostring')"
+  case "$enabled" in
+    false) return 0 ;;
+    true)
+      log "Disabling Home plugins in the database: AI48Proxy does not support plugin execution"
+      curl -fsS --connect-timeout 5 --max-time 30 -X PATCH \
+        -H "X-MANAGEMENT-KEY: ${management_key}" \
+        -H 'Content-Type: application/json' \
+        --data '{"plugins":{"enabled":false}}' \
+        http://127.0.0.1:8327/v8/management/config >/dev/null
+      ;;
+    *) fail "Cannot verify Home plugin state; refusing to start AI48Proxy." ;;
+  esac
+  curl -fsS --connect-timeout 5 --max-time 30 \
+    -H "X-MANAGEMENT-KEY: ${management_key}" \
+    http://127.0.0.1:8327/v8/management/plugins \
+    | jq -e '.plugins_enabled == false' >/dev/null \
+    || fail "Home plugins must be disabled before starting AI48Proxy."
 }
 
 generate_home_jwt() {
   local management_key="$1"
 
   curl -fsS -X POST \
-    http://127.0.0.1:8327/v0/management/certificates/clients \
+    http://127.0.0.1:8327/v8/management/certificates/clients \
     -H "X-MANAGEMENT-KEY: ${management_key}" \
     | jq -er '.home_jwt'
 }
@@ -190,19 +214,21 @@ api-keys:
   - "${gateway_api_key}"
 
 debug: false
+plugins:
+  enabled: false
 EOF_CONFIG
 
   cat > "$BASE_DIR/cluster.yaml" <<EOF_CLUSTER
 pgsql:
   host: "postgres"
   port: 5432
-  user: "cliproxy"
+  user: "ai48home"
   password: "${postgres_password}"
-  database: "cliproxy_home"
+  database: "ai48home"
   sslmode: "disable"
 
 node:
-  external-ip: "home"
+  external-ip: "ai48home"
   external-port: 8327
   port: 8327
   heartbeat-interval: "5s"
@@ -223,11 +249,11 @@ http {
         ''      close;
     }
 
-    upstream cliproxy_backend {
+    upstream ai48proxy_backend {
         least_conn;
-        server cliproxy-1:8317 max_fails=3 fail_timeout=10s;
-        server cliproxy-2:8317 max_fails=3 fail_timeout=10s;
-        server cliproxy-3:8317 max_fails=3 fail_timeout=10s;
+        server ai48proxy-1:8317 max_fails=3 fail_timeout=10s;
+        server ai48proxy-2:8317 max_fails=3 fail_timeout=10s;
+        server ai48proxy-3:8317 max_fails=3 fail_timeout=10s;
         keepalive 96;
     }
 
@@ -238,7 +264,7 @@ http {
         client_max_body_size 100m;
 
         location / {
-            proxy_pass http://cliproxy_backend;
+            proxy_pass http://ai48proxy_backend;
             proxy_http_version 1.1;
 
             proxy_set_header Host $host;
@@ -264,7 +290,7 @@ EOF_NGINX
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: cliproxy-postgres
+    container_name: ai48home-postgres
     environment:
       POSTGRES_USER: \${POSTGRES_USER}
       POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
@@ -277,10 +303,10 @@ services:
       timeout: 5s
       retries: 20
     networks:
-      - cliproxy
+      - ai48proxy
     restart: unless-stopped
 
-  home:
+  ai48home:
     image: \${HOME_IMAGE:-ghcr.io/sofyan48/ai48home:latest}
     pull_policy: always
     container_name: ai48home
@@ -297,103 +323,85 @@ services:
       - ./home-logs:/AI48Home/logs
       - ./home-plugins:/AI48Home/plugins
     networks:
-      cliproxy:
+      ai48proxy:
         aliases:
+          - ai48home
           - home
     stop_grace_period: 30s
     restart: unless-stopped
 
-  cliproxy-1:
-    image: eceasy/cli-proxy-api:v8.0.4
-    container_name: cliproxy-worker-1
+  ai48proxy-1:
+    image: \${AI48PROXY_IMAGE:-ghcr.io/sofyan48/ai48proxy:latest}
+    container_name: ai48proxy-worker-1
     environment:
       HOME_JWT: \${HOME_JWT_1}
       WORKER_START_DELAY: "${WORKER_START_DELAY_SECONDS}"
     depends_on:
-      - home
+      - ai48home
+    command: ["--identity-dir", "/var/lib/ai48proxy/identity"]
     volumes:
-      - ./worker-1-home:/root/.cli-proxy-api
-      - ./worker-1-logs:/CLIProxyAPI/logs
-      - ./worker-1-plugins:/CLIProxyAPI/plugins
-    command: >
-      sh -eu -c '
-        test -n "\$\$HOME_JWT" || { echo "HOME_JWT_1 is empty" >&2; exit 1; }
-        echo "Waiting \$\${WORKER_START_DELAY}s for the previous membership to expire"
-        sleep "\$\${WORKER_START_DELAY}"
-        exec ./CLIProxyAPI -home-jwt "\$\$HOME_JWT"
-      '
+      - worker-1-state:/var/lib/ai48proxy
     networks:
-      - cliproxy
+      - ai48proxy
     stop_grace_period: 30s
     restart: unless-stopped
 
-  cliproxy-2:
-    image: eceasy/cli-proxy-api:v8.0.4
-    container_name: cliproxy-worker-2
+  ai48proxy-2:
+    image: \${AI48PROXY_IMAGE:-ghcr.io/sofyan48/ai48proxy:latest}
+    container_name: ai48proxy-worker-2
     environment:
       HOME_JWT: \${HOME_JWT_2}
       WORKER_START_DELAY: "$((WORKER_START_DELAY_SECONDS + 2))"
     depends_on:
-      - home
+      - ai48home
+    command: ["--identity-dir", "/var/lib/ai48proxy/identity"]
     volumes:
-      - ./worker-2-home:/root/.cli-proxy-api
-      - ./worker-2-logs:/CLIProxyAPI/logs
-      - ./worker-2-plugins:/CLIProxyAPI/plugins
-    command: >
-      sh -eu -c '
-        test -n "\$\$HOME_JWT" || { echo "HOME_JWT_2 is empty" >&2; exit 1; }
-        echo "Waiting \$\${WORKER_START_DELAY}s for the previous membership to expire"
-        sleep "\$\${WORKER_START_DELAY}"
-        exec ./CLIProxyAPI -home-jwt "\$\$HOME_JWT"
-      '
+      - worker-2-state:/var/lib/ai48proxy
     networks:
-      - cliproxy
+      - ai48proxy
     stop_grace_period: 30s
     restart: unless-stopped
 
-  cliproxy-3:
-    image: eceasy/cli-proxy-api:v8.0.4
-    container_name: cliproxy-worker-3
+  ai48proxy-3:
+    image: \${AI48PROXY_IMAGE:-ghcr.io/sofyan48/ai48proxy:latest}
+    container_name: ai48proxy-worker-3
     environment:
       HOME_JWT: \${HOME_JWT_3}
       WORKER_START_DELAY: "$((WORKER_START_DELAY_SECONDS + 4))"
     depends_on:
-      - home
+      - ai48home
+    command: ["--identity-dir", "/var/lib/ai48proxy/identity"]
     volumes:
-      - ./worker-3-home:/root/.cli-proxy-api
-      - ./worker-3-logs:/CLIProxyAPI/logs
-      - ./worker-3-plugins:/CLIProxyAPI/plugins
-    command: >
-      sh -eu -c '
-        test -n "\$\$HOME_JWT" || { echo "HOME_JWT_3 is empty" >&2; exit 1; }
-        echo "Waiting \$\${WORKER_START_DELAY}s for the previous membership to expire"
-        sleep "\$\${WORKER_START_DELAY}"
-        exec ./CLIProxyAPI -home-jwt "\$\$HOME_JWT"
-      '
+      - worker-3-state:/var/lib/ai48proxy
     networks:
-      - cliproxy
+      - ai48proxy
     stop_grace_period: 30s
     restart: unless-stopped
 
   nginx:
     image: nginx:alpine
-    container_name: cliproxy-lb
+    container_name: ai48proxy-lb
     depends_on:
-      - cliproxy-1
-      - cliproxy-2
-      - cliproxy-3
+      - ai48proxy-1
+      - ai48proxy-2
+      - ai48proxy-3
     ports:
       - "8317:8317"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     networks:
-      - cliproxy
+      - ai48proxy
     stop_grace_period: 15s
     restart: unless-stopped
 
+volumes:
+  worker-1-state:
+  worker-2-state:
+  worker-3-state:
+
 networks:
-  cliproxy:
-    name: cliproxy-network
+  ai48proxy:
+    name: ai48proxy-network
 EOF_COMPOSE
 
   chmod 600 "$ENV_FILE" "$BASE_DIR/config.yaml" "$BASE_DIR/cluster.yaml"
@@ -402,7 +410,7 @@ EOF_COMPOSE
 ensure_home_initialized() {
   local management_key="$1"
 
-  compose up -d home
+  compose up -d ai48home
 
   if [[ -f "$BOOTSTRAP_MARKER" ]]; then
     wait_for_home "$management_key"
@@ -416,14 +424,14 @@ ensure_home_initialized() {
   fi
 
   log "AI48Home is not initialized; running the initial import once"
-  compose stop home >/dev/null 2>&1 || true
+  compose stop ai48home >/dev/null 2>&1 || true
 
   compose run --rm --no-deps \
     -v "$BASE_DIR/config.yaml:/AI48Home/config.yaml:ro" \
-    home ./AI48Home -import
+    ai48home ./AI48Home -import
 
   touch "$BOOTSTRAP_MARKER"
-  compose up -d home
+  compose up -d ai48home
   wait_for_home "$management_key"
 }
 
@@ -454,7 +462,7 @@ show_status() {
   printf '\nNodes connected to AI48Home:\n'
   curl -fsS \
     -H "X-MANAGEMENT-KEY: ${management_key}" \
-    http://127.0.0.1:8327/v0/management/nodes | jq . || true
+    http://127.0.0.1:8327/v8/management/nodes | jq . || true
 }
 
 start_cluster() {
@@ -469,11 +477,12 @@ start_cluster() {
   wait_for_postgres
 
   log "Starting AI48Home"
-  compose up -d home
+  compose up -d ai48home
   wait_for_home "$management_key"
+  ensure_plugins_disabled "$management_key"
 
   log "Starting workers and Nginx"
-  compose up -d cliproxy-1 cliproxy-2 cliproxy-3 nginx
+  compose up -d ai48proxy-1 ai48proxy-2 ai48proxy-3 nginx
 
   log "Workers will reconnect after ${WORKER_START_DELAY_SECONDS}-$((WORKER_START_DELAY_SECONDS + 4)) seconds"
   compose ps
@@ -483,10 +492,10 @@ stop_cluster() {
   require_existing_installation
 
   log "Gracefully stopping Nginx and all workers"
-  compose stop nginx cliproxy-1 cliproxy-2 cliproxy-3
+  compose stop nginx ai48proxy-1 ai48proxy-2 ai48proxy-3
 
   log "Stopping AI48Home and PostgreSQL"
-  compose stop home postgres
+  compose stop ai48home postgres
 }
 
 restart_cluster() {
@@ -497,16 +506,17 @@ restart_cluster() {
   validate_unique_jwts
 
   log "Stopping incoming traffic and all workers"
-  compose stop nginx cliproxy-1 cliproxy-2 cliproxy-3
+  compose stop nginx ai48proxy-1 ai48proxy-2 ai48proxy-3
 
   log "Restarting PostgreSQL and AI48Home"
   compose up -d postgres
   wait_for_postgres
-  compose restart home
+  compose restart ai48home
   wait_for_home "$management_key"
+  ensure_plugins_disabled "$management_key"
 
   log "Starting workers; the startup delay prevents active membership conflicts"
-  compose up -d cliproxy-1 cliproxy-2 cliproxy-3 nginx
+  compose up -d ai48proxy-1 ai48proxy-2 ai48proxy-3 nginx
 
   log "Workers will reconnect after ${WORKER_START_DELAY_SECONDS}-$((WORKER_START_DELAY_SECONDS + 4)) seconds"
   compose ps
@@ -535,14 +545,16 @@ upgrade_home() {
     sed -i 's#:/CLIProxyAPIHome/#:/AI48Home/#g; s#container_name: cliproxy-home#container_name: ai48home#' "$COMPOSE_FILE"
   fi
 
-  log "Pulling the latest AI48Home image: $(read_env_value HOME_IMAGE)"
-  compose pull home
+  log "Pulling Home image $(read_env_value HOME_IMAGE) and worker image $(read_env_value AI48PROXY_IMAGE)"
+  compose pull ai48home ai48proxy-1 ai48proxy-2 ai48proxy-3
 
-  log "Replacing the AI48Home container (workers keep running and reconnect automatically)"
-  compose up -d --no-deps home
+  log "Replacing Home and worker containers (identities are preserved)"
+  compose up -d --no-deps ai48home
   wait_for_home "$management_key"
+  ensure_plugins_disabled "$management_key"
+  compose up -d --no-deps ai48proxy-1 ai48proxy-2 ai48proxy-3
 
-  compose ps home
+  compose ps ai48home ai48proxy-1 ai48proxy-2 ai48proxy-3
 }
 
 repair_worker() {
@@ -556,21 +568,23 @@ repair_worker() {
   management_key="$(read_env_value MANAGEMENT_KEY)"
 
   log "Stopping Nginx and worker ${worker_number}"
-  compose stop nginx "cliproxy-${worker_number}" || true
+  compose stop nginx "ai48proxy-${worker_number}" || true
 
   backup_dir="$BASE_DIR/worker-${worker_number}-home.backup-$(date '+%Y%m%d-%H%M%S')"
-  if [[ -d "$BASE_DIR/worker-${worker_number}-home" ]]; then
+  if [[ -d "$BASE_DIR/worker-${worker_number}-state" ]]; then
     log "Backing up the previous identity to $backup_dir"
-    mv "$BASE_DIR/worker-${worker_number}-home" "$backup_dir"
+    mv "$BASE_DIR/worker-${worker_number}-state" "$backup_dir"
   fi
-  mkdir -p "$BASE_DIR/worker-${worker_number}-home"
-  chmod 700 "$BASE_DIR/worker-${worker_number}-home"
+  mkdir -p "$BASE_DIR/worker-${worker_number}-state"
+  chmod 700 "$BASE_DIR/worker-${worker_number}-state"
 
   if ! home_is_ready "$management_key"; then
-    compose up -d postgres home
+    compose up -d postgres ai48home
     wait_for_postgres
     wait_for_home "$management_key"
   fi
+
+  ensure_plugins_disabled "$management_key"
 
   log "Generating a new JWT/certificate for worker ${worker_number}"
   new_jwt="$(generate_home_jwt "$management_key")"
@@ -578,9 +592,9 @@ repair_worker() {
   validate_unique_jwts
 
   log "Restarting worker ${worker_number} and Nginx"
-  compose up -d --force-recreate "cliproxy-${worker_number}" nginx
+  compose up -d --force-recreate "ai48proxy-${worker_number}" nginx
 
-  log "Monitor with: cd $BASE_DIR && docker compose logs -f cliproxy-${worker_number}"
+  log "Monitor with: cd $BASE_DIR && docker compose logs -f ai48proxy-${worker_number}"
 }
 
 deploy_cluster() {
@@ -591,12 +605,13 @@ deploy_cluster() {
   if [[ ! -f "$ENV_FILE" ]]; then
     umask 077
     cat > "$ENV_FILE" <<EOF_ENV
-POSTGRES_USER=cliproxy
-POSTGRES_DB=cliproxy_home
+POSTGRES_USER=ai48home
+POSTGRES_DB=ai48home
 POSTGRES_PASSWORD=$(random_hex 32)
 MANAGEMENT_KEY=$(random_hex 32)
 GATEWAY_API_KEY=sk-gateway-$(random_hex 24)
 HOME_IMAGE=${HOME_IMAGE:-ghcr.io/sofyan48/ai48home:latest}
+AI48PROXY_IMAGE=${AI48PROXY_IMAGE:-ghcr.io/sofyan48/ai48proxy:latest}
 HOME_JWT_1=
 HOME_JWT_2=
 HOME_JWT_3=
@@ -605,6 +620,7 @@ EOF_ENV
 
   # Older installations predate HOME_IMAGE; pin them to the GHCR image.
   grep -qE '^HOME_IMAGE=' "$ENV_FILE" || set_env_value HOME_IMAGE "${HOME_IMAGE:-ghcr.io/sofyan48/ai48home:latest}"
+  grep -qE '^AI48PROXY_IMAGE=' "$ENV_FILE" || set_env_value AI48PROXY_IMAGE "${AI48PROXY_IMAGE:-ghcr.io/sofyan48/ai48proxy:latest}"
 
   postgres_password="$(read_env_value POSTGRES_PASSWORD)"
   management_key="$(read_env_value MANAGEMENT_KEY)"
@@ -635,11 +651,12 @@ EOF_ENV
 
   log "Initializing AI48Home"
   ensure_home_initialized "$management_key"
+  ensure_plugins_disabled "$management_key"
 
   ensure_worker_jwts "$management_key"
 
   log "Starting three workers and the Nginx load balancer"
-  compose up -d cliproxy-1 cliproxy-2 cliproxy-3 nginx
+  compose up -d ai48proxy-1 ai48proxy-2 ai48proxy-3 nginx
 
   log "Workers will reconnect after ${WORKER_START_DELAY_SECONDS}-$((WORKER_START_DELAY_SECONDS + 4)) seconds"
 

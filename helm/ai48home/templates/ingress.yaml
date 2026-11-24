@@ -1,0 +1,45 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "ai48home.fullname" . }}
+  labels:
+    {{- include "ai48home.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    {{- $home := default (dict) .home }}
+    {{- $worker := default (dict) .worker }}
+    {{- $homePaths := include "ai48home.homePaths" $home | fromJsonArray }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range $homePaths }}
+          - path: {{ . | quote }}
+            pathType: {{ $home.pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ include "ai48home.fullname" $ }}-home
+                port:
+                  name: home
+          {{- end }}
+          - path: {{ $worker.path | default "/" | quote }}
+            pathType: {{ $worker.pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ include "ai48home.fullname" $ }}-worker
+                port:
+                  name: http
+    {{- end }}
+{{- end }}

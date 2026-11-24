@@ -49,6 +49,12 @@ type APIKeyUserUpdate struct {
 	DisplayNameSet bool
 	Channels       *[]uint
 	ModelGroups    *[]uint
+	// CreatedByUserID attributes an organization key to the member who owns it.
+	// It is only applied when a key is created.
+	CreatedByUserID *uint
+	// beforeCreate runs inside the create transaction after the key mutation
+	// lock, so organization checks such as key caps cannot race other creates.
+	beforeCreate func(ctx context.Context, tx *gorm.DB) error
 }
 
 type APIKeySelector struct {
@@ -578,6 +584,11 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
 			return errLock
 		}
+		if update.beforeCreate != nil {
+			if errBefore := update.beforeCreate(ctx, tx); errBefore != nil {
+				return errBefore
+			}
+		}
 		if errGroups := ensureAPIKeyGroupsNotDeleted(tx, update.Channels, update.ModelGroups); errGroups != nil {
 			return errGroups
 		}
@@ -621,6 +632,7 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 			record.UserID = &userID
 			record.Channels = channelsJSON
 			record.ModelGroups = modelGroupsJSON
+			record.CreatedByUserID = normalizeOptionalUserID(update.CreatedByUserID)
 			if errCreate := tx.WithContext(ctx).Create(record).Error; errCreate != nil {
 				return errCreate
 			}
@@ -628,10 +640,11 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 			return errFirst
 		case existing.DeletedAt.Valid:
 			updates := map[string]any{
-				"user_id":      &userID,
-				"channels":     channelsJSON,
-				"model_groups": modelGroupsJSON,
-				"deleted_at":   nil,
+				"user_id":            &userID,
+				"channels":           channelsJSON,
+				"model_groups":       modelGroupsJSON,
+				"deleted_at":         nil,
+				"created_by_user_id": normalizeOptionalUserID(update.CreatedByUserID),
 			}
 			if update.DisplayNameSet {
 				updates["display_name"] = displayName
@@ -646,7 +659,7 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 				return errReload
 			}
 		default:
-			if !sameOptionalUint(existing.UserID, &userID) {
+			if !sameOptionalUint(existing.UserID, &userID) || !sameOptionalUint(normalizeOptionalUserID(existing.CreatedByUserID), normalizeOptionalUserID(update.CreatedByUserID)) {
 				return ErrAPIKeyExists
 			}
 			updates := map[string]any{

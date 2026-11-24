@@ -127,7 +127,7 @@ func usageObservabilityOverviewClientGroupsPostgres(db *gorm.DB, query UsageObse
 	// Usernames are needed only for grouped users, but must be resolved before
 	// Top N because the existing order uses the display label to break ties.
 	labeled := db.Table("(?) AS grouped", grouped).
-		Joins(`LEFT JOIN "user" ON grouped.kind = 0 AND "user"."id" = grouped.numeric_id`).
+		Joins(`LEFT JOIN ` + billingOwnerProjectionSQL + ` ON grouped.kind = 0 AND "user"."id" = grouped.numeric_id`).
 		Select(`grouped.*,
 			COALESCE(CAST(grouped.numeric_id AS TEXT), 'unknown') AS aggregate_id,
 			CASE WHEN grouped.kind = 0

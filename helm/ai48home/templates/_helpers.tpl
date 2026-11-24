@@ -41,6 +41,25 @@ Usage: include "ai48home.generatedSecret" (dict "ctx" $ "key" "management-key" "
 {{- end -}}
 {{- end -}}
 
+{{/*
+Home path prefixes for Ingress/HTTPRoute as a JSON array. Home serves from the
+root (no base path), so it needs its UI, asset and API prefixes. A legacy single
+`path` value is still accepted. Usage: include "ai48home.homePaths" .Values.gateway.home
+*/}}
+{{- define "ai48home.homePaths" -}}
+{{- $paths := .paths | default list -}}
+{{- if and (not $paths) .path -}}
+{{- $paths = list .path -}}
+{{- end -}}
+{{- if not $paths -}}
+{{- $paths = list "/admin" "/app" "/assets" "/user" "/v8" -}}
+{{- end -}}
+{{- if has "/home" $paths -}}
+{{- fail "Home has no /home base path; use home.paths (default: /admin /app /assets /user /v8) or a separate hostname" -}}
+{{- end -}}
+{{- toJson $paths -}}
+{{- end -}}
+
 {{- define "ai48home.databaseHost" -}}
 {{- if .Values.postgresql.enabled -}}
 {{ include "ai48home.fullname" . }}-postgresql

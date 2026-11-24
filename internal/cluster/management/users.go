@@ -323,7 +323,16 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 	if errDelete := h.repo.DeleteUser(ctx, id); errDelete != nil {
+		if errors.Is(errDelete, cluster.ErrOrganizationLastOwnerAccount) {
+			respondError(c, http.StatusConflict, "last_owner", errDelete)
+			return
+		}
 		respondUserRecordError(c, "user_delete_failed", errDelete)
+		return
+	}
+	// Deleting a user can remove organization keys, so republish runtime keys.
+	if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
+		respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
 		return
 	}
 	respondOK(c)

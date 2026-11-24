@@ -157,6 +157,26 @@ func Register(group *gin.RouterGroup, handler *Handler) {
 	group.DELETE("/api-keys/:id", handler.DeleteAPIKey)
 	group.DELETE("/api-key/:id", handler.DeleteAPIKey)
 
+	group.GET("/organizations", handler.ListMyOrganizations)
+	group.GET("/organizations/:org_id", handler.GetMyOrganization)
+	group.PATCH("/organizations/:org_id", handler.UpdateMyOrganizationSettings)
+	group.GET("/organizations/:org_id/members", handler.ListMyOrganizationMembers)
+	group.POST("/organizations/:org_id/members", handler.AddMyOrganizationMember)
+	group.PUT("/organizations/:org_id/members/:user_id/reset-allowance", handler.SetMyOrganizationMemberResetAllowance)
+	group.POST("/organizations/:org_id/members/:user_id/period-limits/reset", handler.ResetMyOrganizationMemberPeriodLimits)
+	group.PATCH("/organizations/:org_id/members/:user_id", handler.UpdateMyOrganizationMember)
+	group.DELETE("/organizations/:org_id/members/:user_id", handler.RemoveMyOrganizationMember)
+	group.GET("/organizations/:org_id/api-keys", handler.ListMyOrganizationAPIKeys)
+	group.POST("/organizations/:org_id/api-keys", handler.CreateMyOrganizationAPIKey)
+	group.PATCH("/organizations/:org_id/api-keys/:key_id", handler.UpdateMyOrganizationAPIKey)
+	group.DELETE("/organizations/:org_id/api-keys/:key_id", handler.DeleteMyOrganizationAPIKey)
+	group.GET("/organizations/:org_id/billing/charges", handler.ListMyOrganizationCharges)
+	group.GET("/organizations/:org_id/billing/balance-records", handler.ListMyOrganizationBalanceRecords)
+	group.POST("/organizations/:org_id/billing/recharge", handler.RechargeMyOrganization)
+	group.GET("/organizations/:org_id/billing/recharge-request", handler.GetMyOrganizationRechargeRequest)
+	group.GET("/organizations/:org_id/analytics", handler.MyOrganizationAnalytics)
+	group.GET("/organizations/:org_id/request-logs", handler.ListMyOrganizationRequestLogs)
+
 	group.POST("/passkeys/begin", handler.BeginPasskeyRegistration)
 	group.POST("/passkey/begin", handler.BeginPasskeyRegistration)
 	group.POST("/passkeys/options", handler.BeginPasskeyRegistration)
@@ -799,6 +819,11 @@ func (h *Handler) userByPassword(c *gin.Context, ctx context.Context, fields aut
 const approvalPendingMessage = "Your account is awaiting administrator approval."
 
 func rejectPendingUser(c *gin.Context, record *cluster.UserRecord) bool {
+	if record.IsOrganization() {
+		// Organization accounts are billing containers and never authenticate.
+		respondError(c, http.StatusUnauthorized, "invalid_credentials", fmt.Errorf("invalid credentials"))
+		return true
+	}
 	if !record.ApprovalPending {
 		return false
 	}

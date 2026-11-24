@@ -19,6 +19,8 @@ type UserAnalyticsQuery struct {
 	Timezone string
 	Model    string
 	APIKeyID *uint
+	// ActorUserID narrows organization analytics to one member's keys.
+	ActorUserID *uint
 }
 
 type UserAnalyticsMetrics struct {
@@ -69,7 +71,11 @@ func (r *Repository) UserAnalytics(ctx context.Context, userID uint, query UserA
 	if query.APIKeyID != nil {
 		// Include soft-deleted keys for historical exports, but not reassigned keys.
 		var count int64
-		if errCount := db.Unscoped().Model(&APIKeyRecord{}).Where("id = ? AND user_id = ?", *query.APIKeyID, userID).Count(&count).Error; errCount != nil {
+		keyScope := db.Unscoped().Model(&APIKeyRecord{}).Where("id = ? AND user_id = ?", *query.APIKeyID, userID)
+		if actorID := normalizeOptionalUserID(query.ActorUserID); actorID != nil {
+			keyScope = keyScope.Where("created_by_user_id = ?", *actorID)
+		}
+		if errCount := keyScope.Count(&count).Error; errCount != nil {
 			return UserAnalyticsResult{}, errCount
 		}
 		if count == 0 {
@@ -96,6 +102,9 @@ func (r *Repository) UserAnalytics(ctx context.Context, userID uint, query UserA
 	}
 	if query.APIKeyID != nil {
 		scope = scope.Where("api_key_id = ?", *query.APIKeyID)
+	}
+	if actorID := normalizeOptionalUserID(query.ActorUserID); actorID != nil {
+		scope = scope.Where("actor_user_id = ?", *actorID)
 	}
 	var rows []struct {
 		Date                 string

@@ -429,19 +429,22 @@ func OpenDatabaseSnapshot(ctx context.Context, path string) (*ValidatedDatabaseS
 	}, nil
 }
 
-// Versions 7..13 and 18 were independently assigned by the local and upstream
+// Versions 7..13, 18, and 20 were independently assigned by the local and upstream
 // histories. Local archives always include the redemption table, even when it
 // has no rows. Select a frozen registry before validating the full entry set and
 // row shapes; never relax unknown-field or extra-table validation to accommodate
 // a collision.
 func databaseSnapshotManifestModels(manifest DatabaseSnapshotManifest) ([]databaseModel, bool) {
 	version := manifest.FormatVersion
-	if version >= 7 && version <= 13 || version == 18 {
+	if version >= 7 && version <= 13 || version == 18 || version == 20 {
 		if databaseSnapshotManifestHasTable(manifest, "codex_reset_redemptions") {
 			return databaseSnapshotModels(version)
 		}
 		if version == 18 {
 			return databaseSnapshotUpstreamV18Models, true
+		}
+		if version == 20 {
+			return withUsageModel[UsageRecord](databaseSnapshotUpstreamV18Models), true
 		}
 		return databaseSnapshotV6Models, true
 	}
@@ -1180,13 +1183,18 @@ func importDatabaseSnapshotRecords(ctx context.Context, tx *gorm.DB, snapshot *V
 			progress(DatabaseSnapshotProgress{Operation: "import", Table: model.name, Rows: imported, Skipped: skipped})
 		}
 	}
-	if errRelationships := validateImportedDatabaseSnapshotRelationships(tx); errRelationships != nil {
-		return DatabaseSnapshotImportResult{}, errRelationships
-	}
 	if errCounts := validateDatabaseSnapshotImportCounts(tx, result, snapshot.models); errCounts != nil {
 		return DatabaseSnapshotImportResult{}, errCounts
 	}
-	if errSequences := resetDatabaseSnapshotSequences(tx, backend, snapshot.models); errSequences != nil {
+	if snapshot.manifest.FormatVersion < 28 {
+		if errMigration := migrateOrganizationStorage(tx); errMigration != nil {
+			return DatabaseSnapshotImportResult{}, fmt.Errorf("convert legacy snapshot organizations: %w", errMigration)
+		}
+	}
+	if errRelationships := validateImportedDatabaseSnapshotRelationships(tx); errRelationships != nil {
+		return DatabaseSnapshotImportResult{}, errRelationships
+	}
+	if errSequences := resetDatabaseSnapshotSequences(tx, backend, homeDatabaseModels); errSequences != nil {
 		return DatabaseSnapshotImportResult{}, errSequences
 	}
 	return result, nil
@@ -1380,15 +1388,17 @@ func validateImportedDatabaseSnapshotRelationships(tx *gorm.DB) error {
 		query string
 	}{
 		{name: "plugin_store_auth.key_version", query: `SELECT COUNT(*) FROM "plugin_store_auth" AS child WHERE NOT EXISTS (SELECT 1 FROM "plugin_store_auth_key" AS parent WHERE parent."key_version" = child."key_version")`},
-		{name: "api_key.user_id", query: `SELECT COUNT(*) FROM "api_key" AS child WHERE child."user_id" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "user" AS parent WHERE parent."id" = child."user_id")`},
+		{name: "api_key.user_id", query: `SELECT COUNT(*) FROM "api_key" AS child WHERE child."user_id" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "user" AS parent WHERE parent."id" = child."user_id") AND NOT EXISTS (SELECT 1 FROM "organization" AS parent WHERE parent."id" = child."user_id")`},
+		{name: "organization_member.org_user_id", query: `SELECT COUNT(*) FROM "organization_member" AS child WHERE NOT EXISTS (SELECT 1 FROM "organization" AS parent WHERE parent."id" = child."org_user_id")`},
+		{name: "organization_member.member_user_id", query: `SELECT COUNT(*) FROM "organization_member" AS child WHERE NOT EXISTS (SELECT 1 FROM "user" AS parent WHERE parent."id" = child."member_user_id" AND (parent."kind" IS NULL OR parent."kind" <> 'organization'))`},
 		{name: "channel_group_detail.channel_group_id", query: `SELECT COUNT(*) FROM "channel_group_detail" AS child WHERE NOT EXISTS (SELECT 1 FROM "channel_group" AS parent WHERE parent."id" = child."channel_group_id")`},
 		{name: "channel_group_detail.auth_id", query: `SELECT COUNT(*) FROM "channel_group_detail" AS child WHERE NOT EXISTS (SELECT 1 FROM "auth" AS parent WHERE parent."uuid" = child."auth_id" OR parent."id" = child."auth_id" OR parent."index" = child."auth_id")`},
 		{name: "model_group_detail.model_group_id", query: `SELECT COUNT(*) FROM "model_group_detail" AS child WHERE NOT EXISTS (SELECT 1 FROM "model_group" AS parent WHERE parent."id" = child."model_group_id")`},
 		{name: "quota_snapshot.credential_id", query: `SELECT COUNT(*) FROM "quota_snapshot" AS child WHERE NOT EXISTS (SELECT 1 FROM "auth" AS parent WHERE parent."uuid" = child."credential_id" OR parent."id" = child."credential_id" OR parent."index" = child."credential_id")`},
 		{name: "quota_window.credential_id", query: `SELECT COUNT(*) FROM "quota_window" AS child WHERE NOT EXISTS (SELECT 1 FROM "quota_snapshot" AS parent WHERE parent."credential_id" = child."credential_id")`},
-		{name: "billing_balance_record.user_id", query: `SELECT COUNT(*) FROM "billing_balance_record" AS child WHERE NOT EXISTS (SELECT 1 FROM "user" AS parent WHERE parent."id" = child."user_id")`},
+		{name: "billing_balance_record.user_id", query: `SELECT COUNT(*) FROM "billing_balance_record" AS child WHERE NOT EXISTS (SELECT 1 FROM "user" AS parent WHERE parent."id" = child."user_id") AND NOT EXISTS (SELECT 1 FROM "organization" AS parent WHERE parent."id" = child."user_id")`},
 		{name: "billing_charge.usage_id", query: `SELECT COUNT(*) FROM "billing_charge" AS child WHERE NOT EXISTS (SELECT 1 FROM "usage" AS parent WHERE parent."id" = child."usage_id")`},
-		{name: "billing_charge.user_id", query: `SELECT COUNT(*) FROM "billing_charge" AS child WHERE child."user_id" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "user" AS parent WHERE parent."id" = child."user_id")`},
+		{name: "billing_charge.user_id", query: `SELECT COUNT(*) FROM "billing_charge" AS child WHERE child."user_id" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "user" AS parent WHERE parent."id" = child."user_id") AND NOT EXISTS (SELECT 1 FROM "organization" AS parent WHERE parent."id" = child."user_id")`},
 		{name: "billing_charge.api_key_id", query: `SELECT COUNT(*) FROM "billing_charge" AS child WHERE child."api_key_id" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "api_key" AS parent WHERE parent."id" = child."api_key_id")`},
 		{name: "credential_concurrency_policies.credential_id", query: `SELECT COUNT(*) FROM "credential_concurrency_policies" AS child WHERE NOT EXISTS (SELECT 1 FROM "auth" AS parent WHERE parent."uuid" = child."credential_id")`},
 		{name: "credential_concurrency_model_policies.credential_id", query: `SELECT COUNT(*) FROM "credential_concurrency_model_policies" AS child WHERE NOT EXISTS (SELECT 1 FROM "credential_concurrency_policies" AS parent WHERE parent."credential_id" = child."credential_id")`},

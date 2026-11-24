@@ -15,7 +15,37 @@ Instead of managing each gateway independently, AI48Home centralizes configurati
 - **Coordinated credential scheduling**: Home schedules and distributes credentials to connected gateways, keeping credential selection centrally managed as the deployment grows.
 - **Shared control-plane state**: Use PostgreSQL when running multiple active Home instances; a single Home instance can use SQLite and still manage multiple CLIProxyAPI gateways.
 
-AI48Home manages the control plane; CLIProxyAPI gateways handle AI API requests. Use an ingress, reverse proxy, or load balancer in front of the gateways to distribute incoming client traffic across nodes or clusters. Home's credential scheduling complements this traffic routing rather than replacing it.
+AI48Home manages the control plane; AI48Proxy workers handle AI API requests. Use an ingress, reverse proxy, or load balancer in front of the workers to distribute incoming client traffic across nodes or clusters. Home's credential scheduling complements this traffic routing rather than replacing it.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Client[API clients] --> Ingress[HTTP ingress or load balancer]
+    Ingress --> Worker1[AI48Proxy worker 1]
+    Ingress --> Worker2[AI48Proxy worker 2]
+    Worker1 --> Providers[Upstream AI providers]
+    Worker2 --> Providers
+    Worker1 <-->|RESP over mTLS| Home[AI48Home control plane]
+    Worker2 <-->|RESP over mTLS| Home
+    Home --> Database[Persistent PostgreSQL or SQLite database]
+    Admin[Admin and user panel] --> Home
+```
+
+AI48Home owns the database-backed control plane: credentials, model access,
+routing policy, worker enrollment, configuration snapshots, scheduling, usage,
+request-log ingestion, and management APIs. AI48Proxy is the execution plane:
+each worker receives Home-selected configuration and credentials, executes
+provider requests, exposes the client-compatible API, and reports usage and
+execution state back to Home over RESP with mTLS.
+
+Workers do not maintain an independent credential catalog or replace Home's
+management API. Every worker has its own enrollment identity and durable local
+reporting state. In the Helm topology, one Home replica is paired with two
+AI48Proxy replicas by default; Kubernetes Services, an optional Ingress, or a
+Gateway API HTTPRoute distribute client HTTP connections across Ready workers.
+Home's RESP/mTLS service remains an internal control-plane endpoint unless it is
+intentionally exposed.
 
 ## AI48Home and AI48HomeUI
 
@@ -25,7 +55,7 @@ AI48Home provides the backend service, and [AI48HomeUI](https://github.com/sofya
 
 AI48Home binaries and Docker images include the Web interface, so AI48HomeUI does not need to be deployed separately. After starting Home, open its address, such as `http://localhost:8327`. The administrator console is at `/admin`, and the user workspace is at `/app`.
 
-Administrator access requires a management key; see the [authentication instructions](docs/management/api.md#authentication). Database setup and configuration import are covered under [Cluster Mode](#cluster-mode). Update the Home binary or Docker image to update the bundled Web interface.
+Administrator access requires a management key; see the [authentication instructions](docs/ai48home/management/api.md#authentication). Database setup and configuration import are covered under [Cluster Mode](#cluster-mode). Update the Home binary or Docker image to update the bundled Web interface.
 
 ### Install from GHCR
 
@@ -51,18 +81,63 @@ docker compose -f docker-compose.sqlite.yml up -d
 
 Use `docker-compose.pgsql.yml` and `cluster.pgsql.example.yaml` for PostgreSQL. Pin a release with `AI48HOME_IMAGE=ghcr.io/sofyan48/ai48home:v1.2.0`.
 
-**Full cluster (PostgreSQL, Home, three CPA workers, Nginx)**
+**Full production cluster (PostgreSQL, Home, three AI48Proxy workers, Nginx)**
+
+Download the installer and run it as root:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/sofyan48/AI48Home/main/install.sh
-sudo bash install.sh deploy            # writes /opt/cliproxy-cluster and starts everything
-sudo bash install.sh upgrade           # pull the newest image and replace Home only
-sudo bash install.sh upgrade edge      # switch to the newest panel build
+chmod +x install.sh
+sudo bash install.sh deploy            # initialize, pull images, enroll workers, start stack
+sudo bash install.sh status
+sudo bash install.sh logs ai48proxy-1
 ```
 
-`install.sh` stores the image in `/opt/cliproxy-cluster/.env` as `HOME_IMAGE`; override it before `deploy` with `HOME_IMAGE=ghcr.io/sofyan48/ai48home:v1.2.0 sudo -E bash install.sh deploy`.
+Lifecycle and upgrade commands:
 
-Open `http://<host>:8327/admin` for the admin console and `http://<host>:8327/app` for the user portal.
+```bash
+sudo bash install.sh start
+sudo bash install.sh stop
+sudo bash install.sh restart
+sudo bash install.sh upgrade           # pull configured Home and worker images
+sudo bash install.sh upgrade v1.2.0    # pin Home to a specific image tag
+sudo bash install.sh repair-worker 2   # replace worker 2 identity and JWT
+```
+
+The installer writes its production state under `/opt/cliproxy-cluster` by
+default. Set `BASE_DIR` when using another directory. It generates `.env`,
+imports the initial Home configuration once, issues distinct Home JWTs, and
+pulls the configured GHCR images; it does not build AI48Proxy locally. Keep
+`.env`, generated YAML, JWTs, database data, and worker identity data private.
+For source reload during development, use the separate development Compose
+instructions below.
+
+AI48Proxy is not a drop-in CLIProxyAPI replacement. Native plugins and
+plugin-provided executors are not supported. The production installer explicitly
+sets `plugins.enabled: false` in new bootstrap configuration and disables/verifies
+plugins in Home's database before starting workers during deploy, start, restart,
+upgrade, and repair. Helm worker bootstrap applies the same check, including when
+reusing an existing identity. This global change also affects Home and other CPA
+workers sharing it; use a separate Home if they still require plugins. Do not
+re-enable plugins while AI48Proxy is connected. Direct Compose startup bypasses
+the installer guard.
+
+Before migrating production traffic, back up the database and identities, review
+AI48Proxy's [configuration compatibility](https://github.com/sofyan48/AI48Proxy/blob/main/docs/config-sync-matrix.md)
+and [acceptance runbook](https://github.com/sofyan48/AI48Proxy/blob/main/docs/worker-acceptance.md),
+and verify actual provider requests, streaming, tool calls, usage, and request
+logs. Do not import a fresh configuration over an existing production database
+or delete old worker volumes as a migration shortcut.
+
+`install.sh` stores the Home image in `/opt/cliproxy-cluster/.env` as `HOME_IMAGE` and the worker image as `AI48PROXY_IMAGE`. Both images are pulled from GHCR; no worker image is built locally. Pin them before `deploy`, for example:
+
+```bash
+HOME_IMAGE=ghcr.io/sofyan48/ai48home:v1.2.0 \
+AI48PROXY_IMAGE=ghcr.io/sofyan48/ai48proxy:v0.1.0 \
+sudo -E bash install.sh deploy
+```
+
+Open `http://<host>:8327/admin` for the admin console and `http://<host>:8327/app` for the user portal. Client API traffic goes through `http://<host>:8317`.
 
 **Publishing images.** `.github/workflows/docker-image.yml` builds the panel from `sofyan48/AI48HomeUI`, embeds it, and pushes to GHCR using `GITHUB_TOKEN` (no extra secret). It runs on `v*` tags, on the `panel-updated` dispatch sent by AI48HomeUI, and manually from the Actions tab. After the first push, set the package visibility to **Public** under *Packages → ai48home → Package settings* so servers can pull without logging in.
 
@@ -76,7 +151,7 @@ Every `v*` release publishes the Helm chart to GHCR, next to the Docker image:
 | `oci://ghcr.io/sofyan48/charts/ai48home:latest` | Latest `v*` release |
 | `ai48home-<version>.tgz`, `ai48home-latest.tgz` | GitHub release assets |
 
-The chart deploys one Home instance, a CPA worker StatefulSet with optional HPA, and optional internal PostgreSQL. Each chart version pins its Home image to the same release tag.
+The chart deploys one Home instance and two AI48Proxy worker replicas by default, each with its own enrollment identity/PVC, with optional HPA and internal PostgreSQL. Each chart version pins its Home image to the same release tag.
 
 **1. Write a private values file.** Keep it out of version control (`chmod 600`). The management key and gateway API key are optional: when left empty, the chart generates them on first install.
 
@@ -154,7 +229,7 @@ Services with the default `fullnameOverride: ai48home`:
 | `ai48home-home` | 8327 | Home Management HTTP, Web interface, and RESP/mTLS |
 | `ai48home-worker` | 8317 | Worker API traffic for clients |
 
-Port-forwarding is for debugging only. For production traffic, set `workers.service.type: LoadBalancer` or route an Ingress to `ai48home-worker`, and keep Home private unless you deliberately expose it.
+Port-forwarding is for debugging only. For production traffic, set `workers.service.type: LoadBalancer`, enable the chart's `ingress` or `gateway` routing, or configure an external Gateway/Ingress to `ai48home-worker`. Keep Home private unless you deliberately expose it. The chart supports optional HTTP Ingress and Gateway API HTTPRoute resources; both are disabled by default.
 
 **Upgrade and uninstall.**
 
@@ -168,6 +243,65 @@ helm uninstall ai48home -n ai48home
 Generated keys are reused on upgrades. Uninstall keeps worker PVCs; back up PostgreSQL and the `ai48home-config` Secret before deleting anything. To install from a source checkout instead of GHCR, use `./helm/ai48home` as the chart reference.
 
 See [helm/README.md](helm/README.md) for external PostgreSQL, StorageClass, autoscaling, migration from the old `cliproxy` chart, and troubleshooting.
+
+### Development Docker Compose
+
+For a full local Home + AI48Proxy stack, check out both repositories as
+siblings and run from the `AI48Home` root. The development Compose builds both
+images from source and uses separate development ports/state; it does not use
+the production installer or GHCR worker image.
+
+The Compose file expects the ignored local files `cluster.dev.yaml` and
+`config.dev.yaml` at the repository root. They are local operator files and must
+be created from the examples in this checkout or from your existing development
+configuration.
+
+Start PostgreSQL and build/start Home first:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build postgres
+
+docker compose -f docker-compose.dev.yml run --rm --no-deps \
+  -v "$PWD/config.dev.yaml:/workspace/config.yaml:ro" \
+  ai48home go run ./cmd/home -config /workspace/config.yaml -import
+
+docker compose -f docker-compose.dev.yml up -d --build ai48home
+```
+
+After Home is ready, issue a one-shot worker token with the development key and
+save it locally (the file is ignored by git):
+
+```bash
+curl -fsS -X POST \
+  -H 'X-MANAGEMENT-KEY: dev-management-key' \
+  -H 'Content-Type: application/json' \
+  --data '{"node_name":"ai48proxy-dev"}' \
+  http://127.0.0.1:8327/v8/management/certificates/clients \
+  | jq -er '.home_jwt' > home.jwt
+chmod 600 home.jwt
+docker compose -f docker-compose.dev.yml up -d --build ai48proxy
+```
+
+The development Compose sets `HOME_DEV_DISABLE_MANAGEMENT_IP_BAN=true` to
+skip the Management API's failed-login IP ban. Valid management keys and remote
+access permissions are still required. Do not set this option in production.
+After changing Compose environment variables, recreate Home with
+`docker compose -f docker-compose.dev.yml up -d ai48home`; restarting alone does
+not apply environment changes.
+
+After the initial image build, the existing `.air.toml` reloads Home source
+changes, and `cargo watch` reloads AI48Proxy source changes. Rebuild only after
+changing `Dockerfile.dev` or the development toolchain.
+
+Home is available at `http://localhost:8327` and the single development worker
+is available directly at `http://localhost:8317`. `cluster.dev.yaml`,
+`config.dev.yaml`, `home.jwt`, `logs.dev/`, and `plugins.dev/` are intentionally
+ignored by git. Set
+`HOME_JWT_FILE` if the token is stored elsewhere. Create the token as a regular
+file before starting the worker; the bind mount refuses a missing path instead
+of creating a directory. If a previous startup created an empty `home.jwt/`
+directory, remove that empty directory with `rmdir home.jwt`, then issue the
+token using the commands above.
 
 ### Developing both projects locally
 
@@ -270,7 +404,7 @@ docker compose -f "$COMPOSE_FILE" run --rm \
 
 ## Strict Credential Concurrency Limits
 
-See the [Management API documentation](docs/management/api.md#credential-concurrency-policy-and-limiter-routes) for credential concurrency policy configuration and activation prerequisites.
+See the [Management API documentation](docs/ai48home/management/api.md#credential-concurrency-policy-and-limiter-routes) for credential concurrency policy configuration and activation prerequisites.
 
 ## Contributing
 
@@ -279,7 +413,7 @@ Issues, feature requests, and pull requests are welcome. Choose the repository t
 - **Frontend / Web UI**: Report page display and interaction issues in [AI48HomeUI Issues](https://github.com/sofyan48/AI48HomeUI/issues), and submit frontend changes to AI48HomeUI.
 - **Backend**: Report service, scheduling, and data management issues in [AI48Home Issues](https://github.com/sofyan48/AI48Home/issues), and submit backend changes here.
 
-For changes spanning both projects, link the related issues or pull requests. Update the relevant [Management API](docs/management/api.md) or [User API](docs/user/api.md) documentation when an interface changes.
+For changes spanning both projects, link the related issues or pull requests. Update the relevant AI48Home [Management API](docs/ai48home/management/api.md) or [User API](docs/ai48home/user/api.md) documentation when an interface changes. See the [documentation layout](docs/README.md) for the separation between AI48Home and upstream documentation.
 
 1. Fork the repository.
 2. Create your feature branch (`git checkout -b feature/amazing-feature`).

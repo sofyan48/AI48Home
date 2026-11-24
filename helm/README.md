@@ -1,6 +1,6 @@
 # AI48Home Helm deployment
 
-This chart follows the topology in `install.sh`: optional internal PostgreSQL, one AI48Home instance, and a configurable CPA worker pool. Workers run as a StatefulSet with optional HPA and automatic JWT enrollment. There is **no Nginx or headless Service**. The application Services expose Home on `8327` and workers on `8317`; enabling internal PostgreSQL adds its database Service.
+This chart follows the topology in `install.sh`: optional internal PostgreSQL, one AI48Home instance, and a configurable AI48Proxy worker pool. Workers run as a StatefulSet with optional HPA and automatic JWT enrollment. There is **no Nginx or headless Service**. The application Services expose Home on `8327` and workers on `8317`; enabling internal PostgreSQL adds its database Service.
 
 ## Requirements
 
@@ -138,7 +138,7 @@ The external database must already exist, and the user must have permissions to 
 
 The chart derives PostgreSQL environment variables and Home's `cluster.yaml` from `postgresql.auth` and `postgresql.external`. Do not set connection details only through `home.environment`: Home reads concrete database settings from `cluster.yaml`. The password is stored in a Secret, not the environment ConfigMap. `sslmode: require` encrypts the connection but does not verify server identity like `verify-full`.
 
-## Services (no Nginx)
+## Services and worker routing
 
 With release name `ai48home` and the default `fullnameOverride: ai48home`:
 
@@ -149,7 +149,7 @@ With release name `ai48home` and the default `fullnameOverride: ai48home`:
 
 Without `fullnameOverride`, names are prefixed with `<release>-ai48home`, for example `ai48home-ai48home-home`.
 
-Workers use one regular Service; there is no headless Service or per-pod DNS discovery. StatefulSet names and per-worker PVC identities remain stable.
+The chart defaults to one Home replica and two AI48Proxy worker replicas. Each worker has its own PVC and enrollment identity; the regular worker Service balances HTTP connections across Ready workers. The worker image reads its persisted JWT from its own identity PVC. There is no headless Service or per-pod DNS discovery. StatefulSet names and per-worker PVC identities remain stable.
 
 When upgrading from the chart with a headless Service, `serviceName` changes and Kubernetes requires recreating the StatefulSet. Preserve pods and PVCs using `kubectl -n dev delete statefulset ai48home-workers --cascade=orphan`, then run Helm upgrade. Adjust the namespace and StatefulSet name for your release. Helm removes the obsolete headless Service.
 
@@ -173,7 +173,50 @@ kubectl -n ai48home port-forward service/ai48home-worker 8317:8317
 
 Kubernetes Service balancing is connection-based, not Nginx `least_conn`. EndpointSlices track Ready workers as HPA changes replicas. New connections can reach available workers; existing keep-alive/streaming connections stay with their selected worker and cannot migrate when that pod terminates.
 
-Local forwarding is for debugging only. Even `kubectl port-forward service/...` selects one backing pod and may stop when that pod is replaced or removed. Opening a Service through a desktop tool may also use local forwarding; inspect the actual transport rather than assuming a localhost URL uses ClusterIP balancing. For production, access the Service from inside the cluster or through a configured Ingress/LoadBalancer. This chart does not create an Ingress. A `LoadBalancer` Service requires a load-balancer implementation in the cluster.
+Local forwarding is for debugging only. Even `kubectl port-forward service/...` selects one backing pod and may stop when that pod is replaced or removed. Opening a Service through a desktop tool may also use local forwarding; inspect the actual transport rather than assuming a localhost URL uses ClusterIP balancing. For production, access the Service from inside the cluster or through a configured Ingress/LoadBalancer. The chart can create an optional HTTP `Ingress` or Gateway API `HTTPRoute`; both are disabled by default. A `LoadBalancer` Service still requires a load-balancer implementation in the cluster. The request path is Client → Ingress/Gateway/Service → AI48Proxy workers → upstream provider; workers use RESP/mTLS to reach the single AI48Home control plane, which persists state in PostgreSQL or SQLite.
+
+## Ingress and Gateway API routing
+
+The chart supports two optional HTTP routing resources. Both route client API traffic to the worker Service and can route Home management/UI traffic separately. Home remains private by default.
+
+**Ingress:**
+
+```yaml
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: ai48.example.com
+      home:
+        paths: [/admin, /app, /assets, /user, /v8]
+        pathType: Prefix
+      worker:
+        path: /
+        pathType: Prefix
+  tls:
+    - secretName: ai48-tls
+      hosts: [ai48.example.com]
+```
+
+Home serves from the root and has no base path, so its UI (`/admin`, `/app`), assets (`/assets`), user API (`/user`), and Management API (`/v8`) prefixes are sent to `ai48home-home`; everything else (`/`, including `/v1/...` and `/healthz`) is sent to `ai48home-worker`. A legacy single `home.path` value is still accepted, but `/home` is rejected because Home would answer 404. A separate hostname for Home is the cleanest option. Use a separate hostname or stronger authentication before exposing the Home path publicly. HTTP Ingress does not carry Home RESP/mTLS traffic; workers must reach the in-cluster Home Service for enrollment and RESP.
+
+**Gateway API:**
+
+```yaml
+gateway:
+  enabled: true
+  parentRefs:
+    - name: shared-gateway
+      namespace: gateway-system
+  hostnames:
+    - api.example.com
+  home:
+    paths: [/admin, /app, /assets, /user, /v8]
+  worker:
+    path: /
+```
+
+This requires Gateway API CRDs and an existing Gateway listener accepting the hostname. The HTTPRoute backend ports are the Services' HTTP port 80; Home's RESP/mTLS port 8327 remains internal.
 
 ## Environment ConfigMaps and Secrets
 
@@ -199,7 +242,9 @@ Do not put tokens, passwords, or API keys in `environment`. Required worker/data
 
 - Home checks the database before startup and imports `config.yaml` only if `public.config` is absent or empty. Startup fails on database errors rather than blindly importing.
 - The normal Home container mounts only `cluster.yaml`; runtime configuration remains DB-backed. After first import, changing the Helm management/API keys (supplied or generated) does not update existing DB config. Make changes through the Management API and keep chart values synchronized, particularly the management key used for worker enrollment.
-- Each worker has its own PVC and creates a unique Home JWT through the Management API. The JWT and enrollment identity survive restarts. Startup is staggered by 25 seconds plus 2 seconds per ordinal to allow old membership to expire. Increase the delay if you increase heartbeat timeout.
+- Each worker has its own PVC and creates a unique Home JWT through the Management API. The JWT and enrollment identity survive restarts. Startup is staggered by `workers.startDelaySeconds` (25) plus 2 seconds per ordinal to allow old membership to expire; AI48Proxy applies this delay itself through `WORKER_START_DELAY`. Increase the delay if you increase heartbeat timeout.
+- The AI48Proxy image runs as uid/gid `10001`. Worker pods set `workers.podSecurityContext` accordingly, and the `fix-permissions` init container (`workers.fixPermissions: true`) chowns each identity PVC to that user. This is required for NFS volumes, which ignore `fsGroup`, and for PVCs created by older chart versions with root-owned files. The NFS export must allow root to chown (`no_root_squash`); otherwise pre-own the export directory as `10001:10001` and set `workers.fixPermissions: false`.
+- Worker probes use `GET /healthz`, which returns 200 only while the worker is connected to Home. `workers.terminationGracePeriodSeconds` (120) gives AI48Proxy time to drain in-flight requests and usage reports on scale-down and rollouts.
 - Home uses one replica with `Recreate`, avoiding overlapping instances with the same advertised identity. Do not point multiple chart releases at the same empty database during bootstrap.
 - Internal PostgreSQL uses persistent storage. Changing `postgresql.auth.password` does not rotate an existing database password; rotate the database separately and synchronize values.
 - Worker scaling is controlled by `workers.replicas` when autoscaling is disabled, or by HPA when enabled. Do not share worker PVCs or certificates. StatefulSet PVCs remain on scale-down/uninstall by default; back them up and delete explicitly only when intended. The standalone Home PVC is deleted by Helm uninstall, subject to the PV reclaim policy; back up first.
@@ -236,9 +281,10 @@ Enable HPA for the worker StatefulSet (requires Metrics Server and Kubernetes 1.
 
 ```yaml
 workers:
+  replicas: 2
   autoscaling:
     enabled: true
-    minReplicas: 3
+    minReplicas: 2
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
     scaleDownStabilizationSeconds: 300
@@ -250,7 +296,7 @@ workers:
 
 HPA targets the StatefulSet through its scale subresource; Deployment is not required. StatefulSet preserves per-ordinal PVC/JWT identities, HPA manages the replica count, and the worker Service manages routing to Ready endpoints. Manual `HOME_JWT` generation is not required.
 
-HPA measures the `worker` container CPU against its request, ignoring bootstrap containers. With a 250m request, the 70% target is approximately 175m average CPU per worker. These resource requests are starting values, not measured capacity recommendations.
+HPA measures the `worker` container CPU against its request, ignoring init containers. With a 250m request, the 70% target is approximately 175m average CPU per worker. These resource requests are starting values, not measured capacity recommendations.
 
 CPU-based scaling can underrepresent I/O-bound proxy traffic: low CPU does not mean there are no active requests or streams. Start with at least 2–3 minimum workers for redundancy and tune using realistic traffic. Active-request/concurrency custom metrics may be more suitable, but this chart does not currently implement them. HPA creates pods, not cluster nodes; scaling still requires node capacity and working storage provisioning.
 

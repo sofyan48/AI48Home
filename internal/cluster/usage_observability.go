@@ -37,21 +37,23 @@ var ErrUsageObservabilityTooManyTrendBuckets = errors.New("usage overview trend 
 var usageObservabilitySecretPattern = regexp.MustCompile(`(?i)(authorization|access_token|refresh_token|api_key|client_secret|cookie|set-cookie|bearer|secret)(["']?\s*[:=]\s*["']?|\s+)[^"'\s,;\]}]+`)
 
 type UsageObservabilityRecordQuery struct {
-	From             *time.Time
-	To               *time.Time
-	Provider         string
-	Model            string
-	HomeIP           string
-	Endpoint         string
-	CredentialType   string
-	Status           string
-	StatusCode       *int
-	RequestID        string
-	SessionID        string
-	ParentSessionID  string
-	RootSessionID    string
-	User             string
-	UserID           *uint
+	From            *time.Time
+	To              *time.Time
+	Provider        string
+	Model           string
+	HomeIP          string
+	Endpoint        string
+	CredentialType  string
+	Status          string
+	StatusCode      *int
+	RequestID       string
+	SessionID       string
+	ParentSessionID string
+	RootSessionID   string
+	User            string
+	UserID          *uint
+	// ActorUserID narrows organization usage to one member's charges.
+	ActorUserID      *uint
 	ClientKey        string
 	ClientKeyID      *uint
 	CredentialID     string
@@ -93,6 +95,8 @@ type UsageObservabilityAggregateQuery struct {
 	HomeIP         string
 	Endpoint       string
 	CredentialType string
+	UserID         *uint
+	ActorUserID    *uint
 	GroupBy        string
 	Metric         string
 	Direction      string
@@ -113,6 +117,8 @@ type UsageObservabilityOverviewQuery struct {
 	HomeIP         string
 	Endpoint       string
 	CredentialType string
+	UserID         *uint
+	ActorUserID    *uint
 	Timezone       string
 	Interval       string
 }
@@ -507,6 +513,8 @@ type UsageObservabilityRealtimeQuery struct {
 	HomeIP         string
 	Endpoint       string
 	CredentialType string
+	UserID         *uint
+	ActorUserID    *uint
 	GroupBy        string
 	BucketSeconds  int
 }
@@ -780,6 +788,8 @@ func (r *Repository) ListUsageObservabilityAggregates(ctx context.Context, query
 		HomeIP:         query.HomeIP,
 		Endpoint:       query.Endpoint,
 		CredentialType: query.CredentialType,
+		UserID:         query.UserID,
+		ActorUserID:    query.ActorUserID,
 	}
 
 	var groupedForCount *gorm.DB
@@ -901,6 +911,8 @@ func (r *Repository) UsageObservabilityRealtime(ctx context.Context, query Usage
 		HomeIP:         query.HomeIP,
 		Endpoint:       query.Endpoint,
 		CredentialType: query.CredentialType,
+		UserID:         query.UserID,
+		ActorUserID:    query.ActorUserID,
 	}
 	velocity, errVelocity := usageObservabilityRealtimeVelocitySQL(db, recordQuery, query.BucketSeconds)
 	if errVelocity != nil {
@@ -953,6 +965,8 @@ func usageObservabilityOverviewRecordQuery(query UsageObservabilityOverviewQuery
 		HomeIP:         query.HomeIP,
 		Endpoint:       query.Endpoint,
 		CredentialType: query.CredentialType,
+		UserID:         query.UserID,
+		ActorUserID:    query.ActorUserID,
 	}
 }
 
@@ -1808,7 +1822,7 @@ func usageObservabilityAggregateBaseQuery(db *gorm.DB, query UsageObservabilityR
 	case "user", "client_key":
 		scope = scope.
 			Joins(`LEFT JOIN "api_key" ON "api_key"."api_key" = "usage"."api_key"`).
-			Joins(`LEFT JOIN "user" ON "user"."id" = COALESCE("billing_charge"."user_id", "api_key"."user_id")`)
+			Joins(`LEFT JOIN ` + billingOwnerProjectionSQL + ` ON "user"."id" = COALESCE("billing_charge"."user_id", "api_key"."user_id")`)
 	case "credential":
 		scope = scope.
 			Joins(`LEFT JOIN "auth" AS "auth_uuid" ON "auth_uuid"."deleted_at" IS NULL AND "auth_uuid"."uuid" = "usage"."auth_index"`).
@@ -2463,7 +2477,7 @@ func usageObservabilityRecordScope(scope *gorm.DB, query UsageObservabilityRecor
 	scope = scope.
 		Joins(`LEFT JOIN "billing_charge" ON "billing_charge"."usage_id" = "usage"."id"`).
 		Joins(`LEFT JOIN "api_key" ON "api_key"."api_key" = "usage"."api_key"`).
-		Joins(`LEFT JOIN "user" ON "user"."id" = COALESCE("billing_charge"."user_id", "api_key"."user_id")`).
+		Joins(`LEFT JOIN ` + billingOwnerProjectionSQL + ` ON "user"."id" = COALESCE("billing_charge"."user_id", "api_key"."user_id")`).
 		Joins(`LEFT JOIN "auth" AS "auth_uuid" ON "auth_uuid"."deleted_at" IS NULL AND "auth_uuid"."uuid" = "usage"."auth_index"`).
 		Joins(`LEFT JOIN "auth" AS "auth_by_index" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."deleted_at" IS NULL AND "auth_by_index"."index" = "usage"."auth_index"`).
 		Joins(`LEFT JOIN "auth" AS "auth_by_id" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."uuid" IS NULL AND "auth_by_id"."deleted_at" IS NULL AND "auth_by_id"."id" = "usage"."auth_index"`)
@@ -2487,6 +2501,9 @@ func usageObservabilityRecordQueryDependenciesFor(query UsageObservabilityRecord
 	if normalizeOptionalUint(query.UserID) != nil {
 		dependencies.Billing = true
 		dependencies.APIKey = true
+	}
+	if normalizeOptionalUint(query.ActorUserID) != nil {
+		dependencies.Billing = true
 	}
 	if strings.TrimSpace(query.ClientKey) != "" || normalizeOptionalUint(query.ClientKeyID) != nil {
 		dependencies.Billing = true
@@ -2660,6 +2677,7 @@ func usageObservabilityApplyRecordFilters(scope *gorm.DB, query UsageObservabili
 	if userID := normalizeOptionalUint(query.UserID); userID != nil {
 		scope = scope.Where(`COALESCE("billing_charge"."user_id", "api_key"."user_id") = ?`, *userID)
 	}
+	scope = usageObservabilityActorScope(scope, query.ActorUserID)
 	if clientKey := strings.TrimSpace(query.ClientKey); clientKey != "" {
 		matcher := "%" + clientKey + "%"
 		scope = scope.Where(`"api_key"."api_key" LIKE ? OR "billing_charge"."api_key_masked" LIKE ? OR "billing_charge"."api_key_label" LIKE ? OR CAST("api_key"."id" AS TEXT) LIKE ?`, matcher, matcher, matcher, matcher)
@@ -2732,6 +2750,7 @@ func usageObservabilityApplyUsageFilters(scope *gorm.DB, query UsageObservabilit
 	if query.To != nil {
 		scope = scope.Where(`"usage"."timestamp" < ?`, query.To.UTC())
 	}
+	scope = usageObservabilityOwnerScope(scope, query)
 	if provider := strings.ToLower(strings.TrimSpace(query.Provider)); provider != "" {
 		scope = scope.Where(`LOWER("usage"."provider") = ?`, provider)
 	}
@@ -2805,6 +2824,29 @@ func usageObservabilityApplyUsageFilters(scope *gorm.DB, query UsageObservabilit
 			(? = 'success' AND "usage"."failed" = ?) OR
 			(? = 'failed' AND "usage"."failed" = ?))`,
 			matcher, matcher, matcher, status, false, status, true)
+	}
+	return scope
+}
+
+// usageObservabilityOwnerScope filters by billed owner (user or organization) and
+// organization member without depending on the caller's joins, so narrow overview
+// scans stay join-free. Owner matching mirrors COALESCE(charge.user_id, api_key.user_id).
+func usageObservabilityOwnerScope(scope *gorm.DB, query UsageObservabilityRecordQuery) *gorm.DB {
+	if userID := normalizeOptionalUint(query.UserID); userID != nil {
+		scope = scope.Where(`(EXISTS (SELECT 1 FROM "billing_charge" AS "owner_charge" WHERE "owner_charge"."usage_id" = "usage"."id" AND "owner_charge"."user_id" = ?)
+			OR (NOT EXISTS (SELECT 1 FROM "billing_charge" AS "owner_any_charge" WHERE "owner_any_charge"."usage_id" = "usage"."id" AND "owner_any_charge"."user_id" IS NOT NULL)
+				AND EXISTS (SELECT 1 FROM "api_key" AS "owner_key" WHERE "owner_key"."api_key" = "usage"."api_key" AND "owner_key"."user_id" = ?)))`, *userID, *userID)
+	}
+	return usageObservabilityActorScope(scope, query.ActorUserID)
+}
+
+func usageObservabilityActorScope(scope *gorm.DB, actorUserID *uint) *gorm.DB {
+	if actorID := normalizeOptionalUint(actorUserID); actorID != nil {
+		// Zero-token failures have no charge. Resolve their actor from the key,
+		// but never override an existing charge's historical attribution.
+		scope = scope.Where(`(EXISTS (SELECT 1 FROM "billing_charge" AS "actor_charge" WHERE "actor_charge"."usage_id" = "usage"."id" AND "actor_charge"."actor_user_id" = ?)
+			OR (NOT EXISTS (SELECT 1 FROM "billing_charge" AS "actor_any_charge" WHERE "actor_any_charge"."usage_id" = "usage"."id")
+				AND EXISTS (SELECT 1 FROM "api_key" AS "actor_key" WHERE "actor_key"."api_key" = "usage"."api_key" AND "actor_key"."created_by_user_id" = ?)))`, *actorID, *actorID)
 	}
 	return scope
 }

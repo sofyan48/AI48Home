@@ -1,0 +1,30 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "ai48home.fullname" . }}
+  labels:
+    {{- include "ai48home.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.gateway.parentRefs | nindent 4 }}
+  hostnames:
+    {{- toYaml .Values.gateway.hostnames | nindent 4 }}
+  rules:
+    - matches:
+        {{- range (include "ai48home.homePaths" (default (dict) .Values.gateway.home) | fromJsonArray) }}
+        - path:
+            type: PathPrefix
+            value: {{ . | quote }}
+        {{- end }}
+      backendRefs:
+        - name: {{ include "ai48home.fullname" . }}-home
+          port: 80
+    - matches:
+        - path:
+            type: PathPrefix
+            value: {{ .Values.gateway.worker.path | default "/" | quote }}
+      backendRefs:
+        - name: {{ include "ai48home.fullname" . }}-worker
+          port: 80
+{{- end }}

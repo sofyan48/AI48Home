@@ -433,6 +433,11 @@ func sumUserChargeAmountSinceDB(ctx context.Context, db *gorm.DB, userID uint, s
 // sumUserPeriodWindowChargesDB aggregates enabled windows in a single SQL scan.
 // A nil since for a window contributes 0 without scanning extra rows for that bucket.
 func sumUserPeriodWindowChargesDB(ctx context.Context, db *gorm.DB, userID uint, sinceByWindow map[string]*time.Time) (map[string]float64, error) {
+	return sumPeriodWindowChargesDB(ctx, db, userID, nil, sinceByWindow)
+}
+
+// sumPeriodWindowChargesDB optionally narrows the charges to one organization member.
+func sumPeriodWindowChargesDB(ctx context.Context, db *gorm.DB, userID uint, actorUserID *uint, sinceByWindow map[string]*time.Time) (map[string]float64, error) {
 	out := map[string]float64{
 		PeriodWindow5h:  0,
 		PeriodWindow1d:  0,
@@ -473,7 +478,7 @@ func sumUserPeriodWindowChargesDB(ctx context.Context, db *gorm.DB, userID uint,
 		Sum7d  float64 `gorm:"column:sum_7d"`
 		Sum30d float64 `gorm:"column:sum_30d"`
 	}
-	errScan := db.WithContext(contextOrBackground(ctx)).Raw(`
+	query := `
 SELECT
 	COALESCE(SUM(CASE WHEN "billing_charge"."created_at" >= ? THEN "billing_charge"."amount" ELSE 0 END), 0) AS sum_5h,
 	COALESCE(SUM(CASE WHEN "billing_charge"."created_at" >= ? THEN "billing_charge"."amount" ELSE 0 END), 0) AS sum_1d,
@@ -482,7 +487,14 @@ SELECT
 FROM "billing_charge"
 WHERE "billing_charge"."user_id" = ?
 	AND "billing_charge"."created_at" >= ?
-`, s5h, s1d, s7d, s30d, userID, minSince).Scan(&row).Error
+`
+	args := []any{s5h, s1d, s7d, s30d, userID, minSince}
+	if actorUserID != nil {
+		query += `	AND "billing_charge"."actor_user_id" = ?
+`
+		args = append(args, *actorUserID)
+	}
+	errScan := db.WithContext(contextOrBackground(ctx)).Raw(query, args...).Scan(&row).Error
 	if errScan != nil {
 		return nil, errScan
 	}
@@ -515,8 +527,46 @@ func evaluateUserPeriodWindows(ctx context.Context, db *gorm.DB, user *UserRecor
 		return nil, fmt.Errorf("user is nil")
 	}
 	defaultUserPeriodLimitFields(user)
+	return evaluatePeriodWindows(ctx, db, periodWindowSubject{
+		userID:        user.ID,
+		timezone:      user.Timezone,
+		weekResetDay:  user.WeekResetDay,
+		weekResetHour: user.WeekResetHour,
+		windows: map[string]periodWindowConfig{
+			PeriodWindow5h:  {limit: user.Limit5hCredits, mode: user.WindowMode5h, start: user.PeriodWindowStart5h, epoch: user.UsageEpoch5h},
+			PeriodWindow1d:  {limit: user.Limit1dCredits, mode: user.WindowMode1d, start: user.PeriodWindowStart1d, epoch: user.UsageEpoch1d},
+			PeriodWindow7d:  {limit: user.Limit7dCredits, mode: user.WindowMode7d, start: user.PeriodWindowStart7d, epoch: user.UsageEpoch7d},
+			PeriodWindow30d: {limit: user.Limit30dCredits, mode: user.WindowMode30d, start: user.PeriodWindowStart30d, epoch: user.UsageEpoch30d},
+		},
+	}, now)
+}
+
+// periodWindowConfig is one configured limit window and its runtime state.
+type periodWindowConfig struct {
+	limit *float64
+	mode  string
+	start *time.Time
+	epoch *time.Time
+}
+
+// periodWindowSubject is the account whose charges are measured. A non-nil
+// actorUserID narrows an organization's charges to one member.
+type periodWindowSubject struct {
+	userID        uint
+	actorUserID   *uint
+	timezone      string
+	weekResetDay  int
+	weekResetHour int
+	windows       map[string]periodWindowConfig
+}
+
+func evaluatePeriodWindows(ctx context.Context, db *gorm.DB, subject periodWindowSubject, now time.Time) ([]periodWindowEval, error) {
 	now = now.UTC()
-	loc := loadUserLocation(user.Timezone)
+	loc := loadUserLocation(subject.timezone)
+	w5h := subject.windows[PeriodWindow5h]
+	w1d := subject.windows[PeriodWindow1d]
+	w7d := subject.windows[PeriodWindow7d]
+	w30d := subject.windows[PeriodWindow30d]
 
 	type windowDef struct {
 		id           string
@@ -531,13 +581,13 @@ func evaluateUserPeriodWindows(ctx context.Context, db *gorm.DB, user *UserRecor
 
 	defs := []windowDef{
 		{
-			id: PeriodWindow5h, limit: user.Limit5hCredits, allowCal: false,
-			configured: user.WindowMode5h, start: user.PeriodWindowStart5h, epoch: user.UsageEpoch5h,
+			id: PeriodWindow5h, limit: w5h.limit, allowCal: false,
+			configured: w5h.mode, start: w5h.start, epoch: w5h.epoch,
 			duration: periodLimit5hDuration,
 		},
 		{
-			id: PeriodWindow1d, limit: user.Limit1dCredits, allowCal: true,
-			configured: user.WindowMode1d, start: user.PeriodWindowStart1d, epoch: user.UsageEpoch1d,
+			id: PeriodWindow1d, limit: w1d.limit, allowCal: true,
+			configured: w1d.mode, start: w1d.start, epoch: w1d.epoch,
 			duration: periodLimit1dDuration,
 			calendarSpan: func() (time.Time, time.Time) {
 				lower := startOfDayInLocation(now, loc)
@@ -545,17 +595,17 @@ func evaluateUserPeriodWindows(ctx context.Context, db *gorm.DB, user *UserRecor
 			},
 		},
 		{
-			id: PeriodWindow7d, limit: user.Limit7dCredits, allowCal: true,
-			configured: user.WindowMode7d, start: user.PeriodWindowStart7d, epoch: user.UsageEpoch7d,
+			id: PeriodWindow7d, limit: w7d.limit, allowCal: true,
+			configured: w7d.mode, start: w7d.start, epoch: w7d.epoch,
 			duration: periodLimit7dDuration,
 			calendarSpan: func() (time.Time, time.Time) {
-				lower := startOfCalendarWeek(now, loc, user.WeekResetDay, user.WeekResetHour)
+				lower := startOfCalendarWeek(now, loc, subject.weekResetDay, subject.weekResetHour)
 				return lower, lower.AddDate(0, 0, 7)
 			},
 		},
 		{
-			id: PeriodWindow30d, limit: user.Limit30dCredits, allowCal: true,
-			configured: user.WindowMode30d, start: user.PeriodWindowStart30d, epoch: user.UsageEpoch30d,
+			id: PeriodWindow30d, limit: w30d.limit, allowCal: true,
+			configured: w30d.mode, start: w30d.start, epoch: w30d.epoch,
 			duration: periodLimit30dDuration,
 			calendarSpan: func() (time.Time, time.Time) {
 				lower := startOfMonthInLocation(now, loc)
@@ -626,7 +676,7 @@ func evaluateUserPeriodWindows(ctx context.Context, db *gorm.DB, user *UserRecor
 		out = append(out, eval)
 	}
 
-	totals, errSum := sumUserPeriodWindowChargesDB(ctx, db, user.ID, sinceByWindow)
+	totals, errSum := sumPeriodWindowChargesDB(ctx, db, subject.userID, subject.actorUserID, sinceByWindow)
 	if errSum != nil {
 		return nil, errSum
 	}
@@ -650,6 +700,10 @@ func evaluateUserPeriodWindows(ctx context.Context, db *gorm.DB, user *UserRecor
 }
 
 func periodLimitExceededError(eval periodWindowEval) error {
+	return periodLimitExceededErrorWithMessage(eval, homeerrors.MessageUserPeriodLimitExceeded)
+}
+
+func periodLimitExceededErrorWithMessage(eval periodWindowEval, message string) error {
 	parts := []string{
 		fmt.Sprintf("window=%s", eval.ID),
 		fmt.Sprintf("mode=%s", eval.Mode),
@@ -661,7 +715,7 @@ func periodLimitExceededError(eval periodWindowEval) error {
 	if eval.ResetAt != nil {
 		parts = append(parts, fmt.Sprintf("reset_at=%s", eval.ResetAt.UTC().Format(time.RFC3339)))
 	}
-	return fmt.Errorf("%s: %s (%s)", homeerrors.TypeUserPeriodLimitExceeded, homeerrors.MessageUserPeriodLimitExceeded, strings.Join(parts, " "))
+	return fmt.Errorf("%s: %s (%s)", homeerrors.TypeUserPeriodLimitExceeded, message, strings.Join(parts, " "))
 }
 
 // BuildUserPeriodLimitsStatus computes used/remaining for management APIs.
@@ -670,7 +724,7 @@ func (r *Repository) BuildUserPeriodLimitsStatus(ctx context.Context, userID uin
 	if errDB != nil {
 		return UserPeriodLimitsStatus{}, errDB
 	}
-	user, errUser := r.GetUser(ctx, userID)
+	user, errUser := getBillingOwnerTx(ctx, db, userID)
 	if errUser != nil {
 		return UserPeriodLimitsStatus{}, errUser
 	}
@@ -744,8 +798,8 @@ func (r *Repository) ResetUserPeriodLimits(ctx context.Context, userID uint, win
 
 	var result UserPeriodLimitResetResult
 	errTx := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
-		user := &UserRecord{}
-		if errFirst := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", userID).First(user).Error; errFirst != nil {
+		user, errFirst := getBillingOwnerTx(ctx, tx.Clauses(clause.Locking{Strength: "UPDATE"}), userID)
+		if errFirst != nil {
 			return errFirst
 		}
 		defaultUserPeriodLimitFields(user)
@@ -757,14 +811,15 @@ func (r *Repository) ResetUserPeriodLimits(ctx context.Context, userID uint, win
 
 		updates := userPeriodResetUpdates(user, target, mode, now)
 		if len(updates) > 0 {
-			if errUpdate := tx.Model(&UserRecord{}).Where("id = ?", userID).Updates(updates).Error; errUpdate != nil {
+			if errUpdate := tx.Model(&UserRecord{}).Table(billingOwnerTable(user)).Where("id = ?", userID).Updates(updates).Error; errUpdate != nil {
 				return errUpdate
 			}
 		}
-		// Reload into a zero-value record so database NULLs clear pointer fields
+		// Reload a fresh owner so database NULLs clear pointer fields
 		// retained in the locked pre-update snapshot.
-		user = &UserRecord{}
-		if errReload := tx.Where("id = ?", userID).First(user).Error; errReload != nil {
+		var errReload error
+		user, errReload = getBillingOwnerTx(ctx, tx, userID)
+		if errReload != nil {
 			return errReload
 		}
 		status, errStatus := buildUserPeriodLimitsStatusDB(ctx, tx, user, now)
@@ -824,23 +879,25 @@ func ensureAPIKeyUserBillingAllowed(ctx context.Context, db *gorm.DB, record *AP
 		return nil
 	}
 
-	user := UserRecord{}
-	errFirst := db.WithContext(contextOrBackground(ctx)).
-		Where("id = ?", *userID).
-		First(&user).Error
+	user, errFirst := getBillingOwnerTx(ctx, db, *userID)
 	if errFirst != nil {
 		return errFirst
 	}
-	defaultUserPeriodLimitFields(&user)
+	defaultUserPeriodLimitFields(user)
 	if !user.CreditsUnlimited && user.Credits <= 0 {
 		return fmt.Errorf("%s: %s", homeerrors.TypeUserCreditsInsufficient, homeerrors.MessageUserCreditsInsufficient)
 	}
-	if !userPeriodLimitsEnabled(&user) {
+	if user.IsOrganization() {
+		if errMember := ensureOrganizationMemberKeyAllowed(ctx, db, record, user.ID); errMember != nil {
+			return errMember
+		}
+	}
+	if !userPeriodLimitsEnabled(user) {
 		return nil
 	}
 
 	now := time.Now().UTC()
-	evals, errEval := evaluateUserPeriodWindows(ctx, db, &user, now)
+	evals, errEval := evaluateUserPeriodWindows(ctx, db, user, now)
 	if errEval != nil {
 		return errEval
 	}
@@ -873,17 +930,13 @@ func openUserFirstUseWindowsOnChargeTx(ctx context.Context, tx *gorm.DB, userID 
 	}
 	chargeTime = chargeTime.UTC()
 
-	user := UserRecord{}
-	errFirst := tx.WithContext(contextOrBackground(ctx)).
-		Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("id = ?", userID).
-		First(&user).Error
+	user, errFirst := getBillingOwnerTx(ctx, tx.Clauses(clause.Locking{Strength: "UPDATE"}), userID)
 	if errFirst != nil {
 		return errFirst
 	}
-	defaultUserPeriodLimitFields(&user)
+	defaultUserPeriodLimitFields(user)
 
-	evals, errEval := evaluateUserPeriodWindows(ctx, tx, &user, chargeTime)
+	evals, errEval := evaluateUserPeriodWindows(ctx, tx, user, chargeTime)
 	if errEval != nil {
 		return errEval
 	}
@@ -903,6 +956,7 @@ func openUserFirstUseWindowsOnChargeTx(ctx context.Context, tx *gorm.DB, userID 
 	}
 	return tx.WithContext(contextOrBackground(ctx)).
 		Model(&UserRecord{}).
+		Table(billingOwnerTable(user)).
 		Where("id = ?", userID).
 		Updates(updates).Error
 }

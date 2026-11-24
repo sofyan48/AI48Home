@@ -31,7 +31,7 @@ func newTestService(t *testing.T) (*Service, *gorm.DB) {
 			t.Logf("close sqlite: %v", errClose)
 		}
 	})
-	if errMigrate := db.AutoMigrate(&cluster.AuthRecord{}, &cluster.QuotaWindowRecord{}, &cluster.CPANodeRecord{}, &cluster.CPANodeMetadataRecord{}); errMigrate != nil {
+	if errMigrate := db.AutoMigrate(&cluster.AuthRecord{}, &cluster.QuotaWindowRecord{}, &cluster.CPANodeRecord{}, &cluster.CPANodeMetadataRecord{}, &cluster.CPANodeMembershipRecord{}); errMigrate != nil {
 		t.Fatalf("migrate upstream tables: %v", errMigrate)
 	}
 	service := NewService(db)
@@ -171,7 +171,7 @@ func TestEvaluateCredentialQuotaAndNodeAlerts(t *testing.T) {
 		t.Fatalf("third evaluate: %v", errEval)
 	}
 	messages := recorder.list()
-	if len(messages) != 6 || !strings.HasPrefix(messages[5], "✅ RESOLVED: CPA node offline") {
+	if len(messages) != 6 || !strings.HasPrefix(messages[5], "✅ RESOLVED: Worker offline") {
 		t.Fatalf("expected node resolved notification, got %v", messages)
 	}
 	if _, ok := firingKeys(t, service)["node_offline:node-a"]; ok {

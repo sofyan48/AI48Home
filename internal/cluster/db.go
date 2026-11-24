@@ -65,7 +65,8 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 			return nil
 		}))
 	}
-	sqlDB := sql.OpenDB(lifecyclePostgresConnector{Connector: stdlib.GetConnector(*pgConfig, options...)})
+	connector := &lifecyclePostgresConnector{Connector: stdlib.GetConnector(*pgConfig, options...)}
+	sqlDB := sql.OpenDB(connector)
 	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
 	if cfg.MaxIdleConns != nil {
 		sqlDB.SetMaxIdleConns(*cfg.MaxIdleConns)
@@ -84,7 +85,29 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 		return nil, errPing
 	}
 
-	return db, nil
+	// Delivery transactions must not reserve connections from the pool used by
+	// plugin callbacks. Keep their separate capacity bounded and lazy, even when
+	// the ordinary pool is unlimited. Both pools share connection configuration.
+	deliveryPool := sql.OpenDB(lifecyclePostgresConnector{Connector: connector.Connector})
+	deliveryLimit := maxUsageDeliveryConnections
+	if cfg.MaxOpenConns > 0 && cfg.MaxOpenConns < deliveryLimit {
+		deliveryLimit = cfg.MaxOpenConns
+	}
+	deliveryPool.SetMaxOpenConns(deliveryLimit)
+	deliveryPool.SetMaxIdleConns(1)
+	connector.usageDeliveryPool = deliveryPool
+	deliveryConfig := databaseGORMConfig(cfg.SlowQueryThreshold)
+	deliveryConfig.DisableAutomaticPing = true
+	deliveryDB, errDelivery := gorm.Open(postgres.New(postgres.Config{DSN: dsn, Conn: deliveryPool}), deliveryConfig)
+	if errDelivery != nil {
+		if errClose := sqlDB.Close(); errClose != nil {
+			return nil, fmt.Errorf("open usage delivery database: %w; close sql db: %v", errDelivery, errClose)
+		}
+		return nil, errDelivery
+	}
+	return db.Set(usageDeliveryStoreKey, &postgresUsageDeliveryStore{
+		db: deliveryDB, admission: make(chan struct{}, deliveryLimit),
+	}).Session(&gorm.Session{}), nil
 }
 
 // OpenSQLite opens a SQLite database.
@@ -272,6 +295,7 @@ func runCustomMigrations(db *gorm.DB) error {
 		name string
 		run  func(*gorm.DB) error
 	}{
+		{name: "migrate_organization_storage", run: migrateOrganizationStorage},
 		{name: "migrate_cpa_node_primary_key", run: migrateCPANodePrimaryKey},
 		{name: "migrate_billing_indexes", run: migrateBillingIndexes},
 		{name: "migrate_billing_usage_cover_index", run: migrateBillingUsageCoverIndex},

@@ -238,12 +238,28 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodPut, "/users/:id/reset-allowance", handler.SetUserResetAllowance)
 	r.Set(http.MethodGet, "/users/:id/period-limits", handler.GetUserPeriodLimits)
 	r.Set(http.MethodPost, "/users/:id/period-limits/reset", handler.ResetUserPeriodLimits)
+	r.Set(http.MethodGet, "/users/:id/organizations", handler.ListUserOrganizationsForAdmin)
+	r.Set(http.MethodGet, "/organizations", handler.ListOrganizations)
+	r.Set(http.MethodPost, "/organizations", handler.CreateOrganization)
+	r.Set(http.MethodGet, "/organizations/:id", handler.GetOrganization)
+	r.Set(http.MethodPatch, "/organizations/:id", handler.UpdateOrganization)
+	r.Set(http.MethodDelete, "/organizations/:id", handler.DeleteOrganization)
+	r.Set(http.MethodPost, "/organizations/:id/members", handler.AddOrganizationMember)
+	r.Set(http.MethodPut, "/organizations/:id/members/:user_id/reset-allowance", handler.SetOrganizationMemberResetAllowance)
+	r.Set(http.MethodPost, "/organizations/:id/members/:user_id/period-limits/reset", handler.ResetOrganizationMemberPeriodLimits)
+	r.Set(http.MethodPatch, "/organizations/:id/members/:user_id", handler.UpdateOrganizationMember)
+	r.Set(http.MethodDelete, "/organizations/:id/members/:user_id", handler.RemoveOrganizationMember)
+	r.Set(http.MethodGet, "/organizations/:id/api-keys", handler.ListOrganizationAPIKeys)
+	r.Set(http.MethodPost, "/organizations/:id/api-keys", handler.CreateOrganizationAPIKey)
+	r.Set(http.MethodPatch, "/organizations/:id/api-keys/:key_id", handler.UpdateOrganizationAPIKey)
+	r.Set(http.MethodDelete, "/organizations/:id/api-keys/:key_id", handler.DeleteOrganizationAPIKey)
 	r.Set(http.MethodGet, "/channel-groups", handler.ListChannelGroups)
 	r.Set(http.MethodPost, "/channel-groups", handler.CreateChannelGroup)
 	r.Set(http.MethodGet, "/channel-groups/:id", handler.GetChannelGroup)
 	r.Set(http.MethodPut, "/channel-groups/:id", handler.UpdateChannelGroup)
 	r.Set(http.MethodPatch, "/channel-groups/:id", handler.UpdateChannelGroup)
 	r.Set(http.MethodDelete, "/channel-groups/:id", handler.DeleteChannelGroup)
+	r.Set(http.MethodGet, "/channel-group-credential-candidates", handler.ListChannelGroupCredentialCandidates)
 	r.Set(http.MethodGet, "/channel-group-details", handler.ListChannelGroupDetails)
 	r.Set(http.MethodPost, "/channel-group-details", handler.CreateChannelGroupDetail)
 	r.Set(http.MethodGet, "/channel-group-details/:id", handler.GetChannelGroupDetail)
@@ -561,14 +577,15 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		}
 		opts[i](reg)
 	}
+	managementAuth := managementAuthMiddleware(handler)
 	v8 := engine.Group("/v8/management")
 	v8.Use(withBuildInfoHeaders())
 	if clusterEnabled {
-		v8.Use(clusterAvailabilityMiddleware(clusterOpt, handler), handler.Middleware())
+		v8.Use(clusterAvailabilityMiddleware(clusterOpt, handler), managementAuth)
 	} else {
 		v8.Use(
 			refreshAndAvailabilityMiddleware(configFilePath, handler, authManager, tokenStore),
-			handler.Middleware(),
+			managementAuth,
 			func(c *gin.Context) { c.Set("management.config-v8", true) },
 		)
 	}
@@ -671,6 +688,7 @@ func refreshAndAvailabilityMiddleware(configFilePath string, handler *cpasdkapi.
 			return
 		}
 
+		c.Set("management.auth-config", cfg)
 		if handler != nil {
 			handler.SetConfig(cfg)
 		}
@@ -723,6 +741,7 @@ func clusterAvailabilityMiddleware(opt *ClusterManagementOption, handler *cpasdk
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
+		c.Set("management.auth-config", cfg)
 		if handler != nil {
 			handler.SetConfig(cfg)
 		}

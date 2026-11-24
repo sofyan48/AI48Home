@@ -1,0 +1,38 @@
+# Hot reload for the development Compose stack. Home runs from /srv/home so its
+# runtime files (cluster.yaml, logs, plugins) stay out of the source checkout.
+root = "/workspace"
+tmp_dir = "/tmp/air"
+
+[build]
+cmd = "go -C /workspace build -buildvcs=false -o /tmp/air/main ./cmd/home"
+bin = "/tmp/air/main"
+log = "air_errors.log"
+include_ext = ["go", "tpl", "tmpl", "html", "json"]
+exclude_dir = [
+  ".git",
+  ".github",
+  ".tmp",
+  "tmp",
+  "data",
+  "docs",
+  "docker",
+  "helm",
+  "static",
+  "logs",
+  "logs.dev",
+  "plugins",
+  "plugins.dev",
+]
+exclude_regex = ["_test\\.go$"]
+delay = 1000
+send_interrupt = true
+kill_delay = "5s"
+
+[log]
+time = true
+
+[color]
+main = "magenta"
+watcher = "cyan"
+build = "yellow"
+runner = "green"

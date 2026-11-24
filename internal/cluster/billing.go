@@ -52,6 +52,11 @@ const (
 	BillingCostDiagnosticPricingExprError = "pricing_expr_error"
 )
 
+// billingOwnerProjectionSQL keeps payer reporting independent of authentication rows.
+// Include deleted owners for historical labels; balance reports filter them explicitly.
+const billingOwnerProjectionSQL = `(SELECT id, username, credits, deleted_at FROM "user"
+	UNION ALL SELECT id, username, credits, deleted_at FROM "organization") AS "user"`
+
 var (
 	ErrBillingDuplicateModelPrice = errors.New("billing model price already exists")
 	ErrBillingInvalidModelPrice   = errors.New("invalid billing model price")
@@ -137,8 +142,10 @@ type BillingChargeRecord struct {
 	BilledCacheWriteTokens *int64 `gorm:"column:billed_cache_write_tokens"`
 	BilledReasoningTokens  *int64 `gorm:"column:billed_reasoning_tokens"`
 	// CostBreakdown itemizes the amount by priced token bucket.
-	CostBreakdown JSONB     `gorm:"column:cost_breakdown"`
-	CreatedAt     time.Time `gorm:"column:created_at;not null;index:idx_billing_charge_time_order,priority:1,sort:desc;index:idx_billing_charge_user_time,priority:2,sort:desc;index:idx_billing_charge_provider_model_time,priority:3,sort:desc"`
+	CostBreakdown JSONB `gorm:"column:cost_breakdown"`
+	// ActorUserID is the organization member whose key produced the charge.
+	ActorUserID *uint     `gorm:"column:actor_user_id;index:idx_billing_charge_actor_time,priority:1"`
+	CreatedAt   time.Time `gorm:"column:created_at;not null;index:idx_billing_charge_time_order,priority:1,sort:desc;index:idx_billing_charge_user_time,priority:2,sort:desc;index:idx_billing_charge_provider_model_time,priority:3,sort:desc;index:idx_billing_charge_actor_time,priority:2,sort:desc"`
 }
 
 func (BillingChargeRecord) TableName() string { return "billing_charge" }
@@ -196,6 +203,8 @@ type BillingOverviewQuery struct {
 	Timezone    string
 	UserText    string
 	UserID      *uint
+	// ActorUserID narrows organization charges to one member.
+	ActorUserID *uint
 	Provider    string
 	Model       string
 }
@@ -213,8 +222,10 @@ type BillingOverview struct {
 	ActiveUserCount     int64
 	DailyTrend          []BillingTrendPoint
 	TopUsers            []BillingTopItem
-	TopModels           []BillingTopItem
-	TopProviders        []BillingTopItem
+	// TopMembers ranks organization members (actor_user_id); filled only for a user_id scope.
+	TopMembers   []BillingTopItem
+	TopModels    []BillingTopItem
+	TopProviders []BillingTopItem
 }
 
 type BillingRange struct {
@@ -263,6 +274,8 @@ type BillingChargeQuery struct {
 	ToExclusive *time.Time
 	UserText    string
 	UserID      *uint
+	// ActorUserID narrows organization charges to one member.
+	ActorUserID *uint
 	Provider    string
 	Model       string
 	// AuthIndex filters charges by the serving credential.
@@ -643,7 +656,7 @@ func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQ
 	}
 
 	var totalBalance float64
-	balanceScope := billingUserBalanceQueryScope(db.WithContext(ctx).Model(&UserRecord{}), query)
+	balanceScope := billingUserBalanceQueryScope(db.WithContext(ctx).Table(billingOwnerProjectionSQL).Where(`"user"."deleted_at" IS NULL`), query)
 	if errBalance := balanceScope.Select(`COALESCE(SUM("user"."credits"), 0)`).Scan(&totalBalance).Error; errBalance != nil {
 		return BillingOverview{}, errBalance
 	}
@@ -658,6 +671,14 @@ func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQ
 	topUsers, errTopUsers := billingTopUsers(ctx, db, chargeQuery)
 	if errTopUsers != nil {
 		return BillingOverview{}, errTopUsers
+	}
+	var topMembers []BillingTopItem
+	if normalizeOptionalUserID(chargeQuery.UserID) != nil {
+		var errTopMembers error
+		topMembers, errTopMembers = billingTopUserColumn(ctx, db, chargeQuery, "actor_user_id")
+		if errTopMembers != nil {
+			return BillingOverview{}, errTopMembers
+		}
 	}
 	topModels, topProviders, errRankings := billingTopModelsAndProviders(ctx, db, chargeQuery)
 	if errRankings != nil {
@@ -681,6 +702,7 @@ func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQ
 		ActiveUserCount:     chargeTotals.ActiveUserCount,
 		DailyTrend:          dailyTrend,
 		TopUsers:            topUsers,
+		TopMembers:          topMembers,
 		TopModels:           topModels,
 		TopProviders:        topProviders,
 	}, nil
@@ -856,6 +878,7 @@ func (r *Repository) createBillingChargeForUsageTx(ctx context.Context, tx *gorm
 		PayloadHash:            payloadHash,
 		UserID:                 userID,
 		APIKeyID:               billingAPIKeyID(apiKey),
+		ActorUserID:            billingAPIKeyActorUserID(apiKey),
 		APIKeyLabel:            billingAPIKeyLabel(apiKey),
 		APIKeyMasked:           maskBillingAPIKey(usage.APIKey),
 		Provider:               strings.ToLower(strings.TrimSpace(usage.Provider)),
@@ -897,6 +920,11 @@ func (r *Repository) createBillingChargeForUsageTx(ctx context.Context, tx *gorm
 	// Open first_use period windows on the first billable charge (not on dispatch probes).
 	if errOpen := openUserFirstUseWindowsOnChargeTx(ctx, tx, *userID, charge.CreatedAt); errOpen != nil {
 		return errOpen
+	}
+	if actorID := normalizeOptionalUserID(charge.ActorUserID); actorID != nil {
+		if errOpen := openOrganizationMemberFirstUseWindowsOnChargeTx(ctx, tx, *userID, *actorID, charge.CreatedAt); errOpen != nil {
+			return errOpen
+		}
 	}
 
 	balanceBefore, balanceAfter, errCredits := billingApplyUserCreditDeltaTx(ctx, tx, *userID, -amount)
@@ -1081,9 +1109,9 @@ func billingApplyUserCreditDeltaTx(ctx context.Context, tx *gorm.DB, userID uint
 	if math.IsNaN(delta) || math.IsInf(delta, 0) {
 		return 0, 0, fmt.Errorf("credit delta must be finite")
 	}
-	user := &UserRecord{}
-	if errFirst := tx.WithContext(ctx).Select("id", "credits", "credits_unlimited").Where("id = ?", userID).First(user).Error; errFirst != nil {
-		return 0, 0, errFirst
+	user, errOwner := getBillingOwnerTx(ctx, tx, userID)
+	if errOwner != nil {
+		return 0, 0, errOwner
 	}
 	if delta == 0 || user.CreditsUnlimited {
 		return user.Credits, user.Credits, nil
@@ -1095,7 +1123,7 @@ func billingApplyUserCreditDeltaTx(ctx context.Context, tx *gorm.DB, userID uint
 	// instead of retrying an exact float comparison that can exhaust under load.
 	updated := &UserRecord{ID: userID}
 	update := tx.WithContext(ctx).
-		Model(updated).
+		Model(updated).Table(billingOwnerTable(user)).
 		Clauses(clause.Returning{Columns: []clause.Column{{Name: "credits"}}}).
 		Where("credits_unlimited = ?", false).
 		Update("credits", gorm.Expr("ROUND(CAST(credits AS NUMERIC) + CAST(? AS NUMERIC), 8)", delta))
@@ -1103,9 +1131,9 @@ func billingApplyUserCreditDeltaTx(ctx context.Context, tx *gorm.DB, userID uint
 		return 0, 0, update.Error
 	}
 	if update.RowsAffected == 0 {
-		// The user switched to unlimited credits after the first read.
-		current := &UserRecord{}
-		if errCurrent := tx.WithContext(ctx).Select("id", "credits").Where("id = ?", userID).First(current).Error; errCurrent != nil {
+		// The payer switched to unlimited credits after the first read.
+		current, errCurrent := getBillingOwnerTx(ctx, tx, userID)
+		if errCurrent != nil {
 			return 0, 0, errCurrent
 		}
 		return current.Credits, current.Credits, nil
@@ -1127,9 +1155,12 @@ func billingChargeQueryScope(scope *gorm.DB, query BillingChargeQuery) *gorm.DB 
 	if userID := normalizeOptionalUserID(query.UserID); userID != nil {
 		scope = scope.Where(`"billing_charge"."user_id" = ?`, *userID)
 	}
+	if actorID := normalizeOptionalUserID(query.ActorUserID); actorID != nil {
+		scope = scope.Where(`"billing_charge"."actor_user_id" = ?`, *actorID)
+	}
 	if userText := strings.TrimSpace(query.UserText); userText != "" {
 		matcher := "%" + userText + "%"
-		scope = scope.Joins(`LEFT JOIN "user" ON "user"."id" = "billing_charge"."user_id"`).
+		scope = scope.Joins(`LEFT JOIN `+billingOwnerProjectionSQL+` ON "user"."id" = "billing_charge"."user_id"`).
 			Where(`"user"."username" LIKE ? OR CAST("user"."id" AS TEXT) LIKE ?`, matcher, matcher)
 	}
 	if provider := strings.ToLower(strings.TrimSpace(query.Provider)); provider != "" {
@@ -1157,6 +1188,7 @@ func billingChargeQueryFromOverview(query BillingOverviewQuery) BillingChargeQue
 		ToExclusive: query.ToExclusive,
 		UserText:    query.UserText,
 		UserID:      query.UserID,
+		ActorUserID: query.ActorUserID,
 		Provider:    query.Provider,
 		Model:       query.Model,
 	}
@@ -1251,18 +1283,27 @@ func billingDailyTrend(ctx context.Context, db *gorm.DB, query BillingChargeQuer
 }
 
 func billingTopUsers(ctx context.Context, db *gorm.DB, query BillingChargeQuery) ([]BillingTopItem, error) {
+	return billingTopUserColumn(ctx, db, query, "user_id")
+}
+
+// billingTopUserColumn ranks charges by a user-id column: user_id (billed owner) or actor_user_id (member).
+func billingTopUserColumn(ctx context.Context, db *gorm.DB, query BillingChargeQuery, column string) ([]BillingTopItem, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database connection is nil")
 	}
+	if column != "user_id" && column != "actor_user_id" {
+		return nil, fmt.Errorf("unsupported billing ranking column %q", column)
+	}
+	qualified := `"billing_charge"."` + column + `"`
 	scope := billingChargeQueryScope(db.WithContext(contextOrBackground(ctx)).Model(&BillingChargeRecord{}), query).
-		Where(`"billing_charge"."user_id" IS NOT NULL`)
+		Where(qualified + ` IS NOT NULL`)
 	var rows []struct {
 		UserID       uint
 		Amount       float64
 		RequestCount int64
 	}
-	if errScan := scope.Select(`"billing_charge"."user_id" AS user_id, COALESCE(SUM("billing_charge"."amount"), 0) AS amount, COUNT(*) AS request_count`).
-		Group(`"billing_charge"."user_id"`).
+	if errScan := scope.Select(qualified + ` AS user_id, COALESCE(SUM("billing_charge"."amount"), 0) AS amount, COUNT(*) AS request_count`).
+		Group(qualified).
 		Order("amount DESC, request_count DESC, user_id ASC").
 		Limit(billingOverviewTopLimit).
 		Scan(&rows).Error; errScan != nil {
@@ -1272,7 +1313,11 @@ func billingTopUsers(ctx context.Context, db *gorm.DB, query BillingChargeQuery)
 	for _, row := range rows {
 		ids = append(ids, row.UserID)
 	}
-	labels, errLabels := billingUserLabels(ctx, db, ids)
+	labelScope := db
+	if column == "user_id" {
+		labelScope = db.Table(billingOwnerProjectionSQL)
+	}
+	labels, errLabels := billingUserLabels(ctx, labelScope, ids)
 	if errLabels != nil {
 		return nil, errLabels
 	}
@@ -1365,7 +1410,7 @@ func billingUserLabels(ctx context.Context, db *gorm.DB, ids []uint) (map[uint]s
 		return out, nil
 	}
 	var users []UserRecord
-	if errFind := db.WithContext(contextOrBackground(ctx)).Unscoped().Where("id IN ?", ids).Find(&users).Error; errFind != nil {
+	if errFind := db.WithContext(contextOrBackground(ctx)).Unscoped().Select("id", "username").Where("id IN ?", ids).Find(&users).Error; errFind != nil {
 		return nil, errFind
 	}
 	for _, user := range users {
@@ -1460,10 +1505,17 @@ func billingBalanceQueryScope(scope *gorm.DB, query BillingBalanceQuery) *gorm.D
 	}
 	if userText := strings.TrimSpace(query.UserText); userText != "" {
 		matcher := "%" + userText + "%"
-		scope = scope.Joins(`LEFT JOIN "user" ON "user"."id" = "billing_balance_record"."user_id"`).
+		scope = scope.Joins(`LEFT JOIN `+billingOwnerProjectionSQL+` ON "user"."id" = "billing_balance_record"."user_id"`).
 			Where(`"user"."username" LIKE ? OR CAST("user"."id" AS TEXT) LIKE ?`, matcher, matcher)
 	}
 	return scope
+}
+
+func billingAPIKeyActorUserID(apiKey *APIKeyRecord) *uint {
+	if apiKey == nil {
+		return nil
+	}
+	return normalizeOptionalUserID(apiKey.CreatedByUserID)
 }
 
 func billingAPIKeyByValue(ctx context.Context, tx *gorm.DB, apiKey string) (*APIKeyRecord, error) {
