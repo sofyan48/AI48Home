@@ -22,7 +22,8 @@ import (
 // v26 adds organization_member.model_groups and organization_member.max_api_keys.
 // v27 adds organization member reset allowances and usage epochs.
 // v28 separates organizations from users and reserves shared billing identities.
-const currentDatabaseVersion = 28
+// v29 adds organization.organization_channel_groups (NULL remains unrestricted).
+const currentDatabaseVersion = 29
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -808,10 +809,63 @@ func databaseSnapshotUpstreamV18ModelRegistry() []databaseModel {
 var databaseSnapshotV22Models = withUsageModel[UsageRecord](databaseSnapshotV21Models)
 
 // databaseSnapshotV27Models retains the shared user/organization row format.
-// UserRecord remains unchanged; v23 through v27 differ only by defaulted columns.
+// v23 through v27 differ only by defaulted columns.
 var databaseSnapshotV27Models = append(append([]databaseModel(nil), databaseSnapshotV22Models...),
 	newDatabaseModel[OrganizationMemberRecord]("organization_member", []string{"id"}, true, true),
 )
+
+// databaseSnapshotV28OrganizationRecord freezes the pre-credential-scope shape.
+type databaseSnapshotV28OrganizationRecord struct {
+	ID                             uint     `gorm:"column:id;primaryKey;autoIncrement:false"`
+	Username                       string   `gorm:"column:username;not null;index;uniqueIndex:idx_organization_username_active_unique,where:deleted_at IS NULL"`
+	OrganizationModelGroups        JSONB    `gorm:"column:organization_model_groups"`
+	OrganizationMemberKeysDisabled bool     `gorm:"column:organization_member_keys_disabled;not null;default:false"`
+	Credits                        float64  `gorm:"column:credits;not null;default:0"`
+	CreditsUnlimited               bool     `gorm:"column:credits_unlimited;not null;default:false"`
+	BillingMultiplier              *float64 `gorm:"column:billing_multiplier"`
+	Timezone                       string   `gorm:"column:timezone;not null;default:Asia/Shanghai"`
+
+	ResetAllowanceMode      string     `gorm:"column:reset_allowance_mode;not null;default:''"`
+	ResetAllowanceAmount    int64      `gorm:"column:reset_allowance_amount;not null;default:0"`
+	ResetAllowanceAvailable int64      `gorm:"column:reset_allowance_available;not null;default:0"`
+	ResetAllowanceExpiresAt *time.Time `gorm:"column:reset_allowance_expires_at"`
+	ResetAllowanceRenewsAt  *time.Time `gorm:"column:reset_allowance_renews_at"`
+
+	Limit5hCredits  *float64 `gorm:"column:limit_5h_credits"`
+	WindowMode5h    string   `gorm:"column:window_mode_5h;not null;default:first_use"`
+	Limit1dCredits  *float64 `gorm:"column:limit_1d_credits"`
+	WindowMode1d    string   `gorm:"column:window_mode_1d;not null;default:first_use"`
+	Limit7dCredits  *float64 `gorm:"column:limit_7d_credits"`
+	WindowMode7d    string   `gorm:"column:window_mode_7d;not null;default:first_use"`
+	Limit30dCredits *float64 `gorm:"column:limit_30d_credits"`
+	WindowMode30d   string   `gorm:"column:window_mode_30d;not null;default:first_use"`
+	WeekResetDay    int      `gorm:"column:week_reset_day;not null;default:1"`
+	WeekResetHour   int      `gorm:"column:week_reset_hour;not null;default:0"`
+
+	PeriodWindowStart5h  *time.Time     `gorm:"column:period_window_start_5h"`
+	PeriodWindowStart1d  *time.Time     `gorm:"column:period_window_start_1d"`
+	PeriodWindowStart7d  *time.Time     `gorm:"column:period_window_start_7d"`
+	PeriodWindowStart30d *time.Time     `gorm:"column:period_window_start_30d"`
+	UsageEpoch5h         *time.Time     `gorm:"column:usage_epoch_5h"`
+	UsageEpoch1d         *time.Time     `gorm:"column:usage_epoch_1d"`
+	UsageEpoch7d         *time.Time     `gorm:"column:usage_epoch_7d"`
+	UsageEpoch30d        *time.Time     `gorm:"column:usage_epoch_30d"`
+	CreatedAt            time.Time      `gorm:"column:created_at"`
+	UpdatedAt            time.Time      `gorm:"column:updated_at"`
+	DeletedAt            gorm.DeletedAt `gorm:"column:deleted_at;index"`
+}
+
+func (databaseSnapshotV28OrganizationRecord) TableName() string { return "organization" }
+
+var databaseSnapshotV28Models = func() []databaseModel {
+	models := currentDatabaseModels()
+	for index := range models {
+		if models[index].name == "organization" {
+			models[index] = newDatabaseModel[databaseSnapshotV28OrganizationRecord]("organization", []string{"id"}, false, true)
+		}
+	}
+	return models
+}()
 
 func currentDatabaseModels() []databaseModel {
 	return append(append([]databaseModel(nil), databaseSnapshotV27Models...),
@@ -877,6 +931,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		// v24 repairs the live migration gate. v25 through v27 only add nullable or
 		// defaulted columns, so older organization rows decode into the current records.
 		return databaseSnapshotV27Models, true
+	case 28:
+		return databaseSnapshotV28Models, true
 	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:

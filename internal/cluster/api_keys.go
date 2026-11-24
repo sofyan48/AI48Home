@@ -240,6 +240,17 @@ func (r *Repository) CreateAPIKeyWithRuntimeChange(ctx context.Context, update A
 				return errUser
 			}
 		}
+		channels, errScope := organizationKeyChannels(ctx, tx, userID, update.Channels)
+		if errScope != nil {
+			return errScope
+		}
+		if channels != nil {
+			var errChannels error
+			channelsJSON, errChannels = apiKeyChannelsJSON(*channels)
+			if errChannels != nil {
+				return errChannels
+			}
+		}
 
 		existing := &APIKeyRecord{}
 		errFirst := tx.WithContext(ctx).Unscoped().Where("api_key = ?", key).First(existing).Error
@@ -356,6 +367,15 @@ func (r *Repository) UpdateAPIKeyWithRuntimeChange(ctx context.Context, selector
 				runtimeChanged = true
 			}
 		}
+		nextOwner := record.UserID
+		if update.UserID != nil {
+			nextOwner = normalizeOptionalUserID(update.UserID)
+		}
+		channels, errScope := organizationKeyChannels(ctx, tx, nextOwner, update.Channels)
+		if errScope != nil {
+			return errScope
+		}
+		update.Channels = channels
 		if update.Channels != nil {
 			channelsJSON, errChannels := apiKeyChannelsJSON(*update.Channels)
 			if errChannels != nil {
@@ -495,6 +515,15 @@ func (r *Repository) UpdateAPIKeyBindings(ctx context.Context, apiKey string, us
 		if errFirst := tx.Where("api_key = ?", apiKey).First(record).Error; errFirst != nil {
 			return errFirst
 		}
+		nextOwner := record.UserID
+		if userID != nil {
+			nextOwner = normalizeOptionalUserID(userID)
+		}
+		var errScope error
+		channels, errScope = organizationKeyChannels(ctx, tx, nextOwner, channels)
+		if errScope != nil {
+			return errScope
+		}
 		updates := make(map[string]any)
 		if userID != nil {
 			nextUserID := normalizeOptionalUserID(userID)
@@ -589,6 +618,11 @@ func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, updat
 				return errBefore
 			}
 		}
+		channels, errScope := organizationKeyChannels(ctx, tx, &userID, update.Channels)
+		if errScope != nil {
+			return errScope
+		}
+		update.Channels = channels
 		if errGroups := ensureAPIKeyGroupsNotDeleted(tx, update.Channels, update.ModelGroups); errGroups != nil {
 			return errGroups
 		}
@@ -712,6 +746,11 @@ func (r *Repository) UpdateAPIKeyForUser(ctx context.Context, userID uint, id ui
 		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
 			return errLock
 		}
+		channels, errScope := organizationKeyChannels(ctx, tx, &userID, update.Channels)
+		if errScope != nil {
+			return errScope
+		}
+		update.Channels = channels
 		if errGroups := ensureAPIKeyGroupsNotDeleted(tx, update.Channels, update.ModelGroups); errGroups != nil {
 			return errGroups
 		}
@@ -963,7 +1002,7 @@ func (r *Repository) AllowedUsageIDsForAPIKeyModel(ctx context.Context, apiKey s
 }
 
 func allowedModelDispatchIDsForAPIKeyRecord(ctx context.Context, db *gorm.DB, record *APIKeyRecord, modelID string) ([]string, []string, error) {
-	baseChannelIDs, errBaseChannels := apiKeyChannelsFromJSON(record.Channels)
+	baseChannelIDs, errBaseChannels := effectiveAPIKeyChannels(ctx, db, record)
 	if errBaseChannels != nil {
 		return nil, nil, errBaseChannels
 	}
@@ -1163,7 +1202,7 @@ func allowedAuthIDsForAPIKeyRecord(ctx context.Context, db *gorm.DB, record *API
 	if record == nil {
 		return nil, fmt.Errorf("api key record is nil")
 	}
-	channelIDs, errChannels := apiKeyChannelsFromJSON(record.Channels)
+	channelIDs, errChannels := effectiveAPIKeyChannels(ctx, db, record)
 	if errChannels != nil {
 		return nil, errChannels
 	}
@@ -1356,6 +1395,21 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 		record := existingByID[entry.ID]
 		if record == nil {
 			record = existingByKey[key]
+		}
+		nextOwner := userID
+		if record != nil && !userIDSet {
+			nextOwner = record.UserID
+		}
+		channels, errScope := organizationKeyChannels(ctx, tx, nextOwner, entry.Channels)
+		if errScope != nil {
+			return APIKeyUpsertStats{}, errScope
+		}
+		entry.Channels = channels
+		if channels != nil {
+			channelsJSON, errChannels = apiKeyChannelsJSON(*channels)
+			if errChannels != nil {
+				return APIKeyUpsertStats{}, errChannels
+			}
 		}
 		if record != nil {
 			if duplicate := existingByKey[key]; duplicate != nil && duplicate.ID != record.ID {

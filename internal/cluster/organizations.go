@@ -164,6 +164,7 @@ func (r *Repository) CreateOrganization(ctx context.Context, update UserUpdate) 
 type OrganizationSetup struct {
 	OwnerUserID     *uint
 	ModelGroups     *[]uint
+	ChannelGroups   *[]uint
 	AllowMemberKeys *bool
 }
 
@@ -181,6 +182,9 @@ func (r *Repository) CreateOrganizationWithSetup(ctx context.Context, update Use
 	ctx = contextOrBackground(ctx)
 	var org *UserRecord
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errLock := lockAPIKeyMutationTransaction(tx); errLock != nil {
+			return errLock
+		}
 		created := &UserRecord{Kind: UserKindOrganization}
 		if errApply := applyOrganizationUpdate(created, update); errApply != nil {
 			return errApply
@@ -200,6 +204,17 @@ func (r *Repository) CreateOrganizationWithSetup(ctx context.Context, update Use
 				return errJSON
 			}
 			created.OrganizationModelGroups = groupsJSON
+		}
+		if setup.ChannelGroups != nil {
+			groups := normalizeChannelGroupIDs(*setup.ChannelGroups)
+			if errGroups := ensureAPIKeyGroupsNotDeleted(tx, &groups, nil); errGroups != nil {
+				return errGroups
+			}
+			groupsJSON, errJSON := apiKeyChannelsJSON(groups)
+			if errJSON != nil {
+				return errJSON
+			}
+			created.OrganizationChannelGroups = groupsJSON
 		}
 		if setup.AllowMemberKeys != nil {
 			created.OrganizationMemberKeysDisabled = !*setup.AllowMemberKeys

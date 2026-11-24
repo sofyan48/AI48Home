@@ -337,6 +337,8 @@ type UserRecord struct {
 	// Kind is UserKindOrganization for shared billing accounts. Empty (legacy
 	// rows) and UserKindPersonal both mean a login-capable personal user.
 	Kind string `gorm:"column:kind;type:varchar(16);index"`
+	// OrganizationChannelGroups is compatibility metadata stored only in organization.
+	OrganizationChannelGroups JSONB `gorm:"-" json:"-"`
 	// OrganizationModelGroups is the model-group scope applied to organization keys.
 	OrganizationModelGroups JSONB `gorm:"column:organization_model_groups"`
 	// OrganizationMemberKeysDisabled stops regular members from creating their own

@@ -1376,7 +1376,7 @@ Reset requires an **empty body and no query parameters**: selectors, reset modes
 
 Errors: 400 for invalid bodies/policies (policy validation uses `field_errors` codes `invalid_reset_allowance_mode`, `invalid_reset_allowance_amount`, `invalid_reset_allowance_expiry`); 404 for missing organization/member; 409 `reset_allowance_no_enabled_windows` when no member windows are enabled; 409 `reset_allowance_unavailable` when unconfigured, exhausted or expired. Failed reset does not decrement the allowance.
 
-Organizations are shared billing accounts for teams. An organization is stored as a `user` row with `kind: "organization"`; it owns credits, period limits, `billing_multiplier` and model groups exactly like a user, but it can never log in (password, TOTP, passkey and bearer-token authentication are all rejected). Only administrators create organizations. `GET /users` lists personal users only; organizations are listed by `GET /organizations`.
+Organizations are shared billing accounts for teams. An organization is stored in the dedicated `organization` table (the API retains `kind: "organization"`); it owns credits, period limits, `billing_multiplier`, model groups and credential scopes, but it can never log in (password, TOTP, passkey and bearer-token authentication are all rejected). Only administrators create organizations. `GET /users` lists personal users only; organizations are listed by `GET /organizations`.
 
 Members are personal users linked with a role:
 
@@ -1393,15 +1393,15 @@ Top-ups use the existing billing routes with the organization ID as `user_id` (`
 
 ### GET `/organizations`
 
-Returns `{"organizations": [...]}`. Each item has the user billing fields of `GET /users/:id` (without `password_set`, `approval_pending`, `mfa`, `passkey`) plus `name`, `model_groups`, `member_count` and `owners` (usernames).
+Returns `{"organizations": [...]}`. Each item has the user billing fields of `GET /users/:id` (without `password_set`, `approval_pending`, `mfa`, `passkey`) plus `name`, `model_groups`, `channel_groups`, `member_count` and `owners` (usernames).
 
 ### POST `/organizations`
 
 ```json
-{ "name": "acme", "credits": 100, "owner_user_id": 12, "model_groups": [1, 2] }
+{ "name": "acme", "credits": 100, "owner_user_id": 12, "model_groups": [1, 2], "channel_groups": [3] }
 ```
 
-`name` is required and must be unique among users. Optional fields: `credits`, `credits_unlimited`, `billing_multiplier`, `timezone`, `limit_5h_credits`, `limit_1d_credits`, `limit_7d_credits`, `limit_30d_credits` (number or `null`), `model_groups`, `allow_member_keys` (boolean, default `true`; when `false` regular members cannot create their own organization keys and owners or administrators issue keys for them) and `owner_user_id` (first owner). The organization, owner, model groups and `allow_member_keys` are written in one transaction: if any step fails (unknown owner returns 404 `not_found`, an organization as owner or a deleted model group returns 400 `invalid body`), no organization is created. Returns `{"organization": ...}`; responses include `allow_member_keys`.
+`name` is required and must be unique among active organizations. Optional fields: `credits`, `credits_unlimited`, `billing_multiplier`, `timezone`, `limit_5h_credits`, `limit_1d_credits`, `limit_7d_credits`, `limit_30d_credits` (number or `null`), `model_groups`, `channel_groups` (credential scope IDs), `allow_member_keys` (boolean, default `true`; when `false` regular members cannot create their own organization keys and owners or administrators issue keys for them) and `owner_user_id` (first owner). The organization, owner, model groups, credential scopes and `allow_member_keys` are written in one transaction: if any step fails (unknown owner returns 404 `not_found`, an organization as owner or a deleted model/credential scope returns 400 `invalid body`), no organization is created. Returns `{"organization": ...}`; create, update, list and detail responses include `allow_member_keys` and `channel_groups` (always an array).
 
 ### GET `/organizations/:id`
 
@@ -1410,6 +1410,8 @@ Returns `{"organization": ...}` with `members` and `pending_topup`. Each member 
 ### PATCH `/organizations/:id`
 
 Accepts the same fields as `POST /organizations` except `owner_user_id`. `model_groups` replaces the organization model groups and applies them to every existing organization key; new member keys inherit them.
+
+`channel_groups` replaces the organization's credential scope and is applied transactionally to every organization key, including administrator-created and soft-deleted keys. New/restored organization keys inherit this scope; caller-provided key channels cannot override it, including generic key-management writes. Omitted or `null` leaves the scope unchanged on PATCH; `[]` clears it (unrestricted), and create defaults to unrestricted. IDs are normalized (sorted, deduplicated, zero removed), matching existing key channel semantics. Deleted scopes are rejected with 400 `invalid body`; disabled or unknown IDs remain restrictive. Deleting a credential scope removes its ID from organization and key bindings, using the existing empty/unrestricted semantics. Member model-scope changes preserve credential scopes. Runtime dispatch/catalog filtering also resolves the organization scope and intersects it with model-specific channels; scope updates publish a config event and refresh runtime config. Personal keys are unaffected.
 
 ### DELETE `/organizations/:id`
 

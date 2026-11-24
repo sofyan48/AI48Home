@@ -25,6 +25,7 @@ type organizationWriteRequest struct {
 	Limit7d           optionalJSONFloat `json:"limit_7d_credits"`
 	Limit30d          optionalJSONFloat `json:"limit_30d_credits"`
 	ModelGroups       *[]uint           `json:"model_groups"`
+	ChannelGroups     *[]uint           `json:"channel_groups"`
 	OwnerUserID       *uint             `json:"owner_user_id"`
 	AllowMemberKeys   *bool             `json:"allow_member_keys"`
 }
@@ -140,7 +141,7 @@ func (h *Handler) CreateOrganization(c *gin.Context) {
 	defer cancel()
 	// One transaction: a failed owner or model-group step leaves no organization behind.
 	org, errCreate := h.repo.CreateOrganizationWithSetup(ctx, organizationUserUpdate(body), cluster.OrganizationSetup{
-		OwnerUserID: body.OwnerUserID, ModelGroups: body.ModelGroups, AllowMemberKeys: body.AllowMemberKeys,
+		OwnerUserID: body.OwnerUserID, ModelGroups: body.ModelGroups, ChannelGroups: body.ChannelGroups, AllowMemberKeys: body.AllowMemberKeys,
 	})
 	if errCreate != nil {
 		if respondUserPeriodLimitValidationError(c, errCreate) {
@@ -186,11 +187,24 @@ func (h *Handler) UpdateOrganization(c *gin.Context) {
 			respondOrganizationError(c, "organization_update_failed", errGroups)
 			return
 		}
+	}
+	if body.ChannelGroups != nil {
+		if _, errGroups := h.repo.SetOrganizationChannelGroups(ctx, id, *body.ChannelGroups); errGroups != nil {
+			respondOrganizationError(c, "organization_update_failed", errGroups)
+			return
+		}
+	}
+	if body.ModelGroups != nil || body.ChannelGroups != nil {
 		if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
 			respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
 			return
 		}
-		org, _ = h.repo.GetOrganization(ctx, id)
+		updated, errReload := h.repo.GetOrganization(ctx, id)
+		if errReload != nil {
+			respondOrganizationError(c, "organization_update_failed", errReload)
+			return
+		}
+		org = updated
 	}
 	if body.AllowMemberKeys != nil {
 		updated, errAllow := h.repo.SetOrganizationMemberKeysAllowed(ctx, id, *body.AllowMemberKeys)
@@ -519,6 +533,11 @@ func organizationResponse(org *cluster.UserRecord) gin.H {
 		groups = []uint{}
 	}
 	item["model_groups"] = groups
+	channels, errChannels := cluster.OrganizationChannelGroupsOf(org)
+	if errChannels != nil {
+		channels = []uint{}
+	}
+	item["channel_groups"] = channels
 	item["allow_member_keys"] = !org.OrganizationMemberKeysDisabled
 	return item
 }

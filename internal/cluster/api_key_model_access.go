@@ -23,7 +23,7 @@ func (r *Repository) ModelAccessForAPIKey(ctx context.Context, apiKey string) (*
 	if errFirst != nil {
 		return nil, errFirst
 	}
-	baseChannelIDs, errBaseChannels := apiKeyChannelsFromJSON(record.Channels)
+	baseChannelIDs, errBaseChannels := effectiveAPIKeyChannels(ctx, db, &record)
 	if errBaseChannels != nil {
 		return nil, errBaseChannels
 	}

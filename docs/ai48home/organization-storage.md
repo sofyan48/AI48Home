@@ -19,3 +19,13 @@ Organizations now have a dedicated `organization` table. They are no longer stor
 4. Verify organization balances and billing/usage reports before resuming traffic and starting other updated Home instances.
 
 Portable snapshot format v28 includes the new tables. Older supported snapshots are converted on import after validating source record counts and before validating the new relationships. Do not restore a v28 database into an older Home binary. Rollback requires restoring the pre-upgrade backup while all writers are stopped.
+
+## Organization credential scope (schema/snapshot v29)
+
+`organization.organization_channel_groups` persists the organization's credential scope; the compatibility `UserRecord` DTO carries it without adding a column to `user`. The coordinated schema gate advances from v28 to v29. Existing rows have NULL scope, equivalent to `[]` (unrestricted); no historical key bindings are rewritten merely by upgrading. Legacy organization conversion omits this organization-only column.
+
+Management create/update accepts `channel_groups` and create/update/list/detail returns an array. Setting the scope rewrites all organization-owned key `channels`, including soft-deleted and administrator-created keys, atomically under the existing key mutation lock and publishes a configuration event. Management updates refresh runtime config. Key creation, restore, reassignment, binding updates and full-list replacement enforce inheritance; runtime dispatch and model catalogs also resolve the organization policy rather than trusting stale key bindings. Member model-scope rewrites preserve credential scopes. Personal keys are unchanged.
+
+Omitted/null create scope is unrestricted; omitted/null PATCH scope is unchanged; `[]` explicitly clears restrictions. Deleted scopes cannot be rebound, and deletion cleans organization scope alongside existing key bindings. Disabled/unknown scopes retain the existing restrictive behavior. Model-detail channel scopes continue to intersect the organization credential scope.
+
+Snapshot v29 preserves the new column. Supported older snapshots, including v28, remain importable and missing scope decodes as unrestricted. Stop old writers before upgrading; old binaries do not enforce organization credential policies. Rollback requires the pre-upgrade backup.

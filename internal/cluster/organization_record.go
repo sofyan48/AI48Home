@@ -16,6 +16,7 @@ import (
 type OrganizationRecord struct {
 	ID                             uint     `gorm:"column:id;primaryKey;autoIncrement:false"`
 	Username                       string   `gorm:"column:username;not null;index;uniqueIndex:idx_organization_username_active_unique,where:deleted_at IS NULL"`
+	OrganizationChannelGroups      JSONB    `gorm:"column:organization_channel_groups"`
 	OrganizationModelGroups        JSONB    `gorm:"column:organization_model_groups"`
 	OrganizationMemberKeysDisabled bool     `gorm:"column:organization_member_keys_disabled;not null;default:false"`
 	Credits                        float64  `gorm:"column:credits;not null;default:0"`
@@ -64,6 +65,7 @@ func organizationFromUser(record *UserRecord) *OrganizationRecord {
 	}
 	return &OrganizationRecord{
 		ID: record.ID, Username: record.Username,
+		OrganizationChannelGroups:      cloneJSONB(record.OrganizationChannelGroups),
 		OrganizationModelGroups:        cloneJSONB(record.OrganizationModelGroups),
 		OrganizationMemberKeysDisabled: record.OrganizationMemberKeysDisabled,
 		Credits:                        record.Credits, CreditsUnlimited: record.CreditsUnlimited,
@@ -92,6 +94,7 @@ func (record *OrganizationRecord) userRecord() *UserRecord {
 	}
 	return &UserRecord{
 		ID: record.ID, Kind: UserKindOrganization, Username: record.Username,
+		OrganizationChannelGroups:      cloneJSONB(record.OrganizationChannelGroups),
 		OrganizationModelGroups:        cloneJSONB(record.OrganizationModelGroups),
 		OrganizationMemberKeysDisabled: record.OrganizationMemberKeysDisabled,
 		Credits:                        record.Credits, CreditsUnlimited: record.CreditsUnlimited,

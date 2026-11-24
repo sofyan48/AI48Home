@@ -46,6 +46,9 @@ func migrateOrganizationStorage(db *gorm.DB) error {
 		}
 		columns := make([]string, 0, len(modelSchema.DBNames))
 		for _, column := range modelSchema.DBNames {
+			if column == "organization_channel_groups" {
+				continue // Legacy user rows never stored organization credential scope.
+			}
 			columns = append(columns, quoteDatabaseSnapshotIdentifier(column))
 		}
 		columnList := strings.Join(columns, ", ")

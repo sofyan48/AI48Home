@@ -47,6 +47,7 @@ func removeAccessGroupBindings(tx *gorm.DB, channelIDs, modelIDs []uint) error {
 		ids    []uint
 	}{
 		{&APIKeyRecord{}, "channels", channelIDs},
+		{&OrganizationRecord{}, "organization_channel_groups", channelIDs},
 		{&APIKeyRecord{}, "model_groups", modelIDs},
 		{&ModelGroupDetailRecord{}, "channels", channelIDs},
 	} {
