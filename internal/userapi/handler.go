@@ -336,13 +336,26 @@ func (h *Handler) LoginPasskey(c *gin.Context) {
 	username := body.username()
 	challengeID := body.challengeID()
 	credentialRaw := passkeyCredentialPayload(rawBody, body.Credential)
-	if username == "" || challengeID == "" || len(credentialRaw) == 0 {
-		respondError(c, http.StatusBadRequest, "invalid_body", fmt.Errorf("username, challenge_id, and credential are required"))
+	if challengeID == "" || len(credentialRaw) == 0 {
+		respondError(c, http.StatusBadRequest, "invalid_body", fmt.Errorf("challenge_id and credential are required"))
 		return
 	}
 
 	ctx, cancel := requestContext(c)
 	defer cancel()
+	if username == "" {
+		// Usernameless (discoverable) passkey login: the user is resolved from the credential user handle.
+		record, errLogin := h.finishDiscoverablePasskeyLogin(c, ctx, challengeID, credentialRaw)
+		if errLogin != nil {
+			respondError(c, http.StatusUnauthorized, "invalid_passkey", fmt.Errorf("invalid passkey"))
+			return
+		}
+		if rejectPendingUser(c, record) {
+			return
+		}
+		h.respondLogin(c, ctx, record)
+		return
+	}
 	record, errUser := h.repo.GetUserByUsername(ctx, username)
 	if errUser != nil {
 		respondAuthError(c, errUser)
@@ -643,12 +656,21 @@ func (h *Handler) BeginPasskeyLogin(c *gin.Context) {
 		return
 	}
 	username := body.username()
-	if username == "" {
-		respondError(c, http.StatusBadRequest, "invalid_body", fmt.Errorf("username is required"))
-		return
-	}
 	ctx, cancel := requestContext(c)
 	defer cancel()
+	if username == "" {
+		assertion, challengeID, errBegin := h.beginDiscoverablePasskeyLogin(c, ctx)
+		if errBegin != nil {
+			respondError(c, http.StatusInternalServerError, "passkey_begin_failed", errBegin)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"challenge_id": challengeID,
+			"options":      assertion,
+			"publicKey":    assertion.Response,
+		})
+		return
+	}
 	record, errUser := h.repo.GetUserByUsername(ctx, username)
 	if errUser != nil {
 		respondAuthError(c, errUser)

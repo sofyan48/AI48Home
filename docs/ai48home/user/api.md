@@ -83,7 +83,7 @@ Public routes:
 | `POST` | `/register` | Creates a pending user; returns HTTP 202 without a bearer token. |
 | `POST` | `/login` | Password login for users without passkey and without TOTP. |
 | `POST` | `/login/totp` | Password plus TOTP login for users with TOTP enabled. |
-| `POST` | `/login/passkey` | Passkey login. |
+| `POST` | `/login/passkey` | WebAuthn passkey login, with or without a username. |
 | `POST` | `/email/verify` | Consumes an email-verification token. |
 | `POST` | `/password/forgot` | Accepts a generic password-recovery request. |
 | `POST` | `/password/reset` | Consumes a reset token and sets a new password. |
@@ -391,36 +391,53 @@ Common errors:
 
 ### POST `/login/passkey`
 
-Logs in with a passkey entry stored in `user.passkey`.
+Passkey login is a two-step WebAuthn ceremony: `POST /login/passkey/begin` (alias `/login/passkey/options`) returns assertion options, then `POST /login/passkey` verifies the browser assertion.
 
-Example request:
+Two modes are supported:
+
+- **Usernameless (discoverable)**: omit `username`. `begin` returns options without `allowCredentials`, the browser lets the user choose a passkey, and Home resolves the account from the credential `userHandle`. This only works for discoverable (resident) credentials. New registrations require a resident key; older non-discoverable passkeys must use the username mode.
+- **Username**: send `username` to both requests. `begin` returns `allowCredentials` for that user.
+
+`begin` request (both fields optional):
+
+```json
+{ "username": "alice" }
+```
+
+`begin` response:
 
 ```json
 {
-  "username": "alice",
-  "passkey_id": "pk_xxx",
-  "passkey_secret": "one-time-returned-secret"
+  "challenge_id": "opaque-challenge-id",
+  "options": { "publicKey": { "...": "..." } },
+  "publicKey": { "challenge": "base64url", "rpId": "example.com", "userVerification": "required" }
 }
 ```
 
-The route can also compare an opaque JSON `credential` field if the passkey was created with a `credential` payload.
+Finish request:
+
+```json
+{
+  "challenge_id": "opaque-challenge-id",
+  "credential": { "id": "...", "rawId": "...", "type": "public-key", "response": { "...": "..." } }
+}
+```
 
 Fields:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `username` | string | yes | Username. Aliases: `user_name`, `user-name`. |
-| `passkey_id` | string | yes | Passkey ID. Alias: `passkey-id`; `id` is also accepted. |
-| `passkey_secret` | string | conditionally | Secret returned when the passkey was created. Alias: `secret`. |
-| `credential` | object | conditionally | Opaque credential JSON used for exact comparison when no secret hash is stored. |
+| `username` | string | no | Username. Aliases: `user_name`, `user-name`. Omit for usernameless login; when present it must match the `begin` request. |
+| `challenge_id` | string | yes | Challenge ID returned by `begin`. Aliases: `challenge-id`, `session_id`, `session-id`, `state`. |
+| `credential` | object | yes | `PublicKeyCredential` JSON from `navigator.credentials.get()`. |
 
-Response: login response shape.
+Response: login response shape. Pending-approval users receive `403 approval_pending` in both modes.
 
 Common errors:
 
 ```json
 { "error": "invalid_passkey", "message": "invalid passkey" }
-{ "error": "invalid_body", "message": "username and passkey_id are required" }
+{ "error": "invalid_body", "message": "challenge_id and credential are required" }
 ```
 
 ### PATCH `/me`

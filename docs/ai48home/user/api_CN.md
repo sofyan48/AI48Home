@@ -81,7 +81,7 @@ user-email:
 | `POST` | `/register` | 创建待审批用户；返回 HTTP 202，不签发 bearer token。 |
 | `POST` | `/login` | 用户未启用 passkey 和 TOTP 时的密码登录。 |
 | `POST` | `/login/totp` | 用户启用 TOTP 时的密码 + TOTP 登录。 |
-| `POST` | `/login/passkey` | Passkey 登录。 |
+| `POST` | `/login/passkey` | WebAuthn passkey 登录，可带或不带用户名。 |
 | `POST` | `/email/verify` | 消费邮箱验证 token。 |
 | `POST` | `/password/forgot` | 接收通用密码找回请求。 |
 | `POST` | `/password/reset` | 消费重置 token 并设置新密码。 |
@@ -389,36 +389,53 @@ user-panel:
 
 ### POST `/login/passkey`
 
-使用存储在 `user.passkey` 中的 passkey entry 登录。
+Passkey 登录是两步 WebAuthn 流程：`POST /login/passkey/begin`（别名 `/login/passkey/options`）返回 assertion options，然后 `POST /login/passkey` 校验浏览器返回的 assertion。
 
-示例请求：
+支持两种模式：
+
+- **无用户名（discoverable）**：不传 `username`。`begin` 返回不含 `allowCredentials` 的 options，由浏览器让用户选择 passkey，Home 通过 credential 的 `userHandle` 解析账号。仅适用于 discoverable（resident）credential。新注册的 passkey 强制要求 resident key；旧的非 discoverable passkey 需使用用户名模式。
+- **用户名**：两个请求都传 `username`。`begin` 返回该用户的 `allowCredentials`。
+
+`begin` 请求（字段均可选）：
+
+```json
+{ "username": "alice" }
+```
+
+`begin` 响应：
 
 ```json
 {
-  "username": "alice",
-  "passkey_id": "pk_xxx",
-  "passkey_secret": "one-time-returned-secret"
+  "challenge_id": "opaque-challenge-id",
+  "options": { "publicKey": { "...": "..." } },
+  "publicKey": { "challenge": "base64url", "rpId": "example.com", "userVerification": "required" }
 }
 ```
 
-如果 passkey 是用 `credential` payload 创建的，此 route 也可以对比 opaque JSON `credential` 字段。
+完成请求：
+
+```json
+{
+  "challenge_id": "opaque-challenge-id",
+  "credential": { "id": "...", "rawId": "...", "type": "public-key", "response": { "...": "..." } }
+}
+```
 
 字段：
 
 | Field | Type | Required | 说明 |
 | --- | --- | --- | --- |
-| `username` | string | yes | 用户名。Aliases: `user_name`, `user-name`。 |
-| `passkey_id` | string | yes | Passkey ID。Alias: `passkey-id`；也接受 `id`。 |
-| `passkey_secret` | string | conditionally | 创建 passkey 时返回的 secret。Alias: `secret`。 |
-| `credential` | object | conditionally | 未存储 secret hash 时用于精确比较的 opaque credential JSON。 |
+| `username` | string | no | 用户名。Aliases: `user_name`, `user-name`。无用户名登录时省略；若传入，必须与 `begin` 请求一致。 |
+| `challenge_id` | string | yes | `begin` 返回的 challenge ID。Aliases: `challenge-id`, `session_id`, `session-id`, `state`。 |
+| `credential` | object | yes | `navigator.credentials.get()` 返回的 `PublicKeyCredential` JSON。 |
 
-响应：登录响应结构。
+响应：登录响应结构。两种模式下待审批用户都会收到 `403 approval_pending`。
 
 常见错误：
 
 ```json
 { "error": "invalid_passkey", "message": "invalid passkey" }
-{ "error": "invalid_body", "message": "username and passkey_id are required" }
+{ "error": "invalid_body", "message": "challenge_id and credential are required" }
 ```
 
 ### PATCH `/me`

@@ -22,6 +22,8 @@ const (
 	webAuthnSessionProvider     = "webauthn"
 	webAuthnCeremonyRegister    = "passkey_register"
 	webAuthnCeremonyLogin       = "passkey_login"
+	webAuthnCeremonyDiscover    = "passkey_login_discoverable"
+	webAuthnUserIDPrefix        = "cpah-user-"
 	webAuthnSessionErrorMessage = "WebAuthn ceremony failed"
 )
 
@@ -242,7 +244,20 @@ func webAuthnCredentialID(id []byte) string {
 }
 
 func webAuthnUserID(id uint) []byte {
-	return []byte("cpah-user-" + strconv.FormatUint(uint64(id), 10))
+	return []byte(webAuthnUserIDPrefix + strconv.FormatUint(uint64(id), 10))
+}
+
+// parseWebAuthnUserID resolves a WebAuthn user handle back to a Home user ID.
+func parseWebAuthnUserID(handle []byte) (uint, error) {
+	raw := string(handle)
+	if !strings.HasPrefix(raw, webAuthnUserIDPrefix) {
+		return 0, fmt.Errorf("invalid user handle")
+	}
+	id, errParse := strconv.ParseUint(strings.TrimPrefix(raw, webAuthnUserIDPrefix), 10, 64)
+	if errParse != nil || id == 0 {
+		return 0, fmt.Errorf("invalid user handle")
+	}
+	return uint(id), nil
 }
 
 func (h *Handler) beginPasskeyRegistration(c *gin.Context, ctx context.Context, record *cluster.UserRecord) (*protocol.CredentialCreation, string, error) {
@@ -257,7 +272,7 @@ func (h *Handler) beginPasskeyRegistration(c *gin.Context, ctx context.Context, 
 	credentials := passkeyCredentials(entries)
 	options := []webauthn.RegistrationOption{
 		webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
-			ResidentKey:      protocol.ResidentKeyRequirementPreferred,
+			ResidentKey:      protocol.ResidentKeyRequirementRequired,
 			UserVerification: protocol.VerificationRequired,
 		}),
 		webauthn.WithExclusions(webauthn.Credentials(credentials).CredentialDescriptors()),
@@ -375,6 +390,82 @@ func (h *Handler) finishPasskeyLogin(c *gin.Context, ctx context.Context, record
 	}
 	record.Passkey = rawNext
 	return nil
+}
+
+// beginDiscoverablePasskeyLogin starts a usernameless passkey login.
+func (h *Handler) beginDiscoverablePasskeyLogin(c *gin.Context, ctx context.Context) (*protocol.CredentialAssertion, string, error) {
+	rp, errRP := webAuthnForRequest(c)
+	if errRP != nil {
+		return nil, "", errRP
+	}
+	assertion, session, errBegin := rp.BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationRequired))
+	if errBegin != nil {
+		return nil, "", errBegin
+	}
+	challengeID, errStore := h.storeWebAuthnSession(ctx, webAuthnCeremonyDiscover, 0, session)
+	if errStore != nil {
+		return nil, "", errStore
+	}
+	return assertion, challengeID, nil
+}
+
+// finishDiscoverablePasskeyLogin validates a usernameless passkey assertion and returns the resolved user.
+func (h *Handler) finishDiscoverablePasskeyLogin(c *gin.Context, ctx context.Context, challengeID string, credentialRaw json.RawMessage) (*cluster.UserRecord, error) {
+	session, errSession := h.loadWebAuthnSession(ctx, challengeID, webAuthnCeremonyDiscover, 0)
+	if errSession != nil {
+		return nil, errSession
+	}
+	rp, errRP := webAuthnForRequest(c)
+	if errRP != nil {
+		return nil, errRP
+	}
+	parsed, errParse := protocol.ParseCredentialRequestResponseBytes(credentialRaw)
+	if errParse != nil {
+		_ = h.repo.SetOAuthSessionError(ctx, challengeID, webAuthnSessionErrorMessage)
+		return nil, errParse
+	}
+	var record *cluster.UserRecord
+	resolveUser := func(_, userHandle []byte) (webauthn.User, error) {
+		userID, errID := parseWebAuthnUserID(userHandle)
+		if errID != nil {
+			return nil, errID
+		}
+		loaded, errUser := h.repo.GetUser(ctx, userID)
+		if errUser != nil {
+			return nil, errUser
+		}
+		user, _, errPasskeyUser := newPasskeyUser(loaded)
+		if errPasskeyUser != nil {
+			return nil, errPasskeyUser
+		}
+		if len(user.credentials) == 0 {
+			return nil, fmt.Errorf("passkey is not enabled")
+		}
+		record = loaded
+		return user, nil
+	}
+	_, credential, errValidate := rp.ValidatePasskeyLogin(resolveUser, *session, parsed)
+	if errValidate != nil || record == nil {
+		_ = h.repo.SetOAuthSessionError(ctx, challengeID, webAuthnSessionErrorMessage)
+		if errValidate == nil {
+			errValidate = fmt.Errorf("passkey user not resolved")
+		}
+		return nil, errValidate
+	}
+	rawNext, errUpdateCredential := updatePasskeyCredential(record.Passkey, credential)
+	if errUpdateCredential != nil {
+		_ = h.repo.SetOAuthSessionError(ctx, challengeID, webAuthnSessionErrorMessage)
+		return nil, errUpdateCredential
+	}
+	if _, errUpdate := h.repo.UpdateUser(ctx, record.ID, cluster.UserUpdate{Passkey: &rawNext}); errUpdate != nil {
+		_ = h.repo.SetOAuthSessionError(ctx, challengeID, webAuthnSessionErrorMessage)
+		return nil, errUpdate
+	}
+	if errComplete := h.repo.CompleteOAuthSession(ctx, challengeID); errComplete != nil {
+		return nil, errComplete
+	}
+	record.Passkey = rawNext
+	return record, nil
 }
 
 func (h *Handler) storeWebAuthnSession(ctx context.Context, ceremony string, userID uint, session *webauthn.SessionData) (string, error) {
