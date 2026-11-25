@@ -398,9 +398,12 @@ func (r *Repository) AppendUsageWithRuntimeOutcome(ctx context.Context, payload 
 				return errExisting
 			}
 			record = existing
-			return nil
+			return persistExplicitQuotaFeedback(tx, record)
 		}
 		inserted = true
+		if errFeedback := persistExplicitQuotaFeedback(tx, record); errFeedback != nil {
+			return errFeedback
+		}
 		return r.createBillingChargeForUsageTx(ctx, tx, record, payload)
 	})
 	if errTransaction != nil {

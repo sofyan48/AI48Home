@@ -61,6 +61,14 @@ func (a *RuntimeAdapter) Enabled() bool {
 	return a != nil && a.repo != nil
 }
 
+// CheckDispatchQuota forwards the durable guard; disabled adapters fail closed.
+func (a *RuntimeAdapter) CheckDispatchQuota(ctx context.Context, credentialID, model string) error {
+	if !a.Enabled() {
+		return quotaGuardUnavailable()
+	}
+	return a.repo.CheckDispatchQuota(ctx, credentialID, model)
+}
+
 // LoadIndex loads an index.
 func (a *RuntimeAdapter) LoadIndex(ctx context.Context) error {
 	// Validate input data before converting it into runtime state.

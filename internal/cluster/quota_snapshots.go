@@ -333,6 +333,11 @@ func upsertQuotaSnapshotDB(ctx context.Context, db *gorm.DB, input QuotaSnapshot
 				return nil
 			}
 		}
+		// Guard ordering is per scope/window, not the display snapshot watermark.
+		// A delayed exhausted window must not be lost behind another window's update.
+		if errGuards := updateQuotaGuards(tx, input); errGuards != nil {
+			return errGuards
+		}
 		existingObservationInvalid := errExisting == nil && input.MaxAcceptedObservedAt != nil && existing.ObservedAt != nil && existing.ObservedAt.After(input.MaxAcceptedObservedAt.UTC())
 		if errExisting == nil && !existingObservationInvalid && quotaObservationIsOlder(existing.ObservedAt, input.ObservedAt) {
 			return nil
@@ -759,7 +764,13 @@ func (r *Repository) claimQuotaProbe(ctx context.Context, credentialID string, o
 			if claimActivityAt == nil && recoverAbandonedProbe {
 				claimActivityAt = quotaUTC(record.ProbeActivityAt)
 			}
-			if claimActivityAt == nil {
+			var blockedGuards int64
+			if errGuards := tx.Model(&QuotaGuardRecord{}).Where("credential_id = ? AND blocked = ?", credentialID, true).Limit(1).Count(&blockedGuards).Error; errGuards != nil {
+				return errGuards
+			}
+			// A latched credential cannot generate fresh usage. Keep probing it
+			// on the normal freshness/backoff schedule until recovery is proven.
+			if claimActivityAt == nil && blockedGuards == 0 {
 				// Forced claims may have no recoverable activity watermark. Clear an
 				// expired orphan instead of exposing collecting indefinitely.
 				if errFind == nil && record.CollectionStatus == "collecting" {

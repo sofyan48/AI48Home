@@ -279,6 +279,8 @@ routing:
 
   cooldown:
     # Disable Home request-error and quota cooldown scheduling when true.
+    # Known exhausted quota still blocks dispatch until authoritative quota recovery;
+    # this setting and manual cooldown resets do not bypass the durable quota guard.
     # A credential/provider disable-cooling value, when present, overrides this global value.
     disable-cooling: false
     # Home-mode CPA nodes always receive disable-cooling: true; Home owns cooldown decisions.

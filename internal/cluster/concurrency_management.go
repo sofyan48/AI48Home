@@ -94,6 +94,9 @@ func (r *Repository) patchAuthTx(ctx context.Context, tx *gorm.DB, credentialID 
 		if errDeleteWindows := tx.WithContext(contextOrBackground(ctx)).Where("credential_id = ?", credentialID).Delete(&QuotaWindowRecord{}).Error; errDeleteWindows != nil {
 			return errDeleteWindows
 		}
+		if errDeleteGuards := tx.WithContext(contextOrBackground(ctx)).Where("credential_id = ?", credentialID).Delete(&QuotaGuardRecord{}).Error; errDeleteGuards != nil {
+			return errDeleteGuards
+		}
 	}
 	return appendEvent(tx, "auth", "update", credentialID, record.Version)
 }

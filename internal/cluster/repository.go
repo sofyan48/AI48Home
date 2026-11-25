@@ -310,6 +310,9 @@ func (r *Repository) upsertAuthWithResult(ctx context.Context, auth *coreauth.Au
 				if errDeleteWindows := tx.Where("credential_id = ?", record.UUID).Delete(&QuotaWindowRecord{}).Error; errDeleteWindows != nil {
 					return errDeleteWindows
 				}
+				if errDeleteGuards := tx.Where("credential_id = ?", record.UUID).Delete(&QuotaGuardRecord{}).Error; errDeleteGuards != nil {
+					return errDeleteGuards
+				}
 			}
 			if existing.DeletedAt.Valid {
 				result = UpsertResultRestored
@@ -487,6 +490,9 @@ func (r *Repository) mutateAuthState(ctx context.Context, uuid string, op string
 			}
 			if errDeleteWindows := txDB.Where("credential_id = ?", uuid).Delete(&QuotaWindowRecord{}).Error; errDeleteWindows != nil {
 				return errDeleteWindows
+			}
+			if errDeleteGuards := txDB.Where("credential_id = ?", uuid).Delete(&QuotaGuardRecord{}).Error; errDeleteGuards != nil {
+				return errDeleteGuards
 			}
 		}
 		outAuth = auth
@@ -871,6 +877,9 @@ func (r *Repository) SoftDeleteAuthWithVersion(ctx context.Context, uuid string)
 		}
 		if errDeleteWindows := tx.Where("credential_id = ?", uuid).Delete(&QuotaWindowRecord{}).Error; errDeleteWindows != nil {
 			return errDeleteWindows
+		}
+		if errDeleteGuards := tx.Where("credential_id = ?", uuid).Delete(&QuotaGuardRecord{}).Error; errDeleteGuards != nil {
+			return errDeleteGuards
 		}
 		if errEvent := appendEvent(tx, "auth", "delete", record.UUID, record.Version); errEvent != nil {
 			return errEvent

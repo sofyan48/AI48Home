@@ -23,7 +23,8 @@ import (
 // v27 adds organization member reset allowances and usage epochs.
 // v28 separates organizations from users and reserves shared billing identities.
 // v29 adds organization.organization_channel_groups (NULL remains unrestricted).
-const currentDatabaseVersion = 29
+// v30 adds durable quota guards, including recovered observation watermarks.
+const currentDatabaseVersion = 30
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -858,7 +859,7 @@ type databaseSnapshotV28OrganizationRecord struct {
 func (databaseSnapshotV28OrganizationRecord) TableName() string { return "organization" }
 
 var databaseSnapshotV28Models = func() []databaseModel {
-	models := currentDatabaseModels()
+	models := databaseSnapshotV29Models()
 	for index := range models {
 		if models[index].name == "organization" {
 			models[index] = newDatabaseModel[databaseSnapshotV28OrganizationRecord]("organization", []string{"id"}, false, true)
@@ -871,7 +872,13 @@ func currentDatabaseModels() []databaseModel {
 	return append(append([]databaseModel(nil), databaseSnapshotV27Models...),
 		newDatabaseModel[OrganizationRecord]("organization", []string{"id"}, false, true),
 		newDatabaseModel[BillingIdentityRecord]("billing_identity", []string{"id"}, true, true),
+		newDatabaseModel[QuotaGuardRecord]("quota_guard", []string{"credential_id", "window_id", "scope", "scope_id"}, false, true),
 	)
+}
+
+func databaseSnapshotV29Models() []databaseModel {
+	models := currentDatabaseModels()
+	return models[:len(models)-1]
 }
 
 func withUsageModel[T any](source []databaseModel) []databaseModel {
@@ -933,6 +940,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV27Models, true
 	case 28:
 		return databaseSnapshotV28Models, true
+	case 29:
+		return databaseSnapshotV29Models(), true
 	case currentDatabaseVersion:
 		return homeDatabaseModels, true
 	default:

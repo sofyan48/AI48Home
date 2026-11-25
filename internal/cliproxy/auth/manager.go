@@ -1325,7 +1325,28 @@ func (m *Manager) useSchedulerFastPath() bool {
 }
 
 // Dispatch processes dispatch.
-func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedModel string, opts Options) (*DispatchDecision, error) {
+func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedModel string, opts Options) (decision *DispatchDecision, err error) {
+	var quotaError error
+	defer func() {
+		if quotaError != nil && quotaDispatchUnavailable(err) {
+			err = quotaError
+		}
+	}()
+	// Direct core callers need the same speculative selection lifecycle as Home.
+	if opts.SessionAffinity == nil {
+		opts.SessionAffinity = &SessionAffinitySelection{}
+		defer func() {
+			if err == nil && decision != nil && opts.SessionAffinity.Commit != nil {
+				swapped, errSwap := opts.SessionAffinity.Store.CompareAndSwapSessionBinding(ctx, *opts.SessionAffinity.Commit)
+				if errSwap != nil {
+					decision, err = nil, errSwap
+				} else if !swapped {
+					decision, err = nil, ErrSessionAffinityConflict
+				}
+			}
+			opts.SessionAffinity.Finish(err == nil && decision != nil)
+		}()
+	}
 	selectionReturned := false
 	defer func() {
 		if !selectionReturned {
@@ -1431,6 +1452,15 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 			if upstream == "" {
 				upstream = routeModel
 			}
+			if errQuota := m.checkDispatchQuota(ctx, fullAuth.ID, upstream); errQuota != nil {
+				if errQuota.Code != "quota_exhausted" {
+					return nil, errQuota
+				}
+				quotaError = errQuota
+				opts.SessionAffinity.Reset()
+				continue
+			}
+			selectionReturned = true
 			return &DispatchDecision{
 				Auth:          fullAuth.Clone(),
 				Provider:      fullProviderKey,
@@ -1670,6 +1700,14 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 		upstream := strings.TrimSpace(fullCandidate.upstreamModel)
 		if upstream == "" {
 			upstream = routeModel
+		}
+		if errQuota := m.checkDispatchQuota(ctx, fullAuth.ID, upstream); errQuota != nil {
+			if errQuota.Code != "quota_exhausted" {
+				return nil, errQuota
+			}
+			quotaError = errQuota
+			opts.SessionAffinity.Reset()
+			continue
 		}
 		selectionReturned = true
 		selectionID, _ := opts.Metadata["selection_id"].(string)

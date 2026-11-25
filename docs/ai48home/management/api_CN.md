@@ -2776,6 +2776,18 @@ Home 会把生成的 credential 作为 DB-backed OAuth auth records 存储，并
 
 ## 凭证额度和冷却操作
 
+### 持久化额度调度保护
+
+Home 在返回调度凭证前检查数据库额度保护。额度耗尽属于 Account Credential：**任意窗口 exhausted 都会阻断该凭证上的全部模型**，不区分 Provider、模型、alias、prefix、窗口 scope 或 bucket。固定凭证、会话亲和、重试及 fallback 均遵守此规则；仍可按原有固定/会话规则选择其他健康凭证。窗口与 scope 标识仅用于跟踪权威恢复，不会缩小调度阻断范围。
+
+此保护独立于执行 cooldown。`disable-cooling: true`、冷却到期、清理 cooldown、成功的生成请求以及 stale/unknown/error 额度数据均不能解除阻断；重置时间到达也不代表恢复。必须由严格更新的主动额度探测确认相同窗口及 scope 为 healthy/low（包括规范化后的 unlimited），且该凭证的所有阻断窗口都已恢复。没有历史 exhausted 的未知额度本身不会产生阻断。被阻断凭证无需新生成流量即可继续定时探测，但仍遵守探测有效期、退避及 disabled/refresh-blocked 排除规则。`POST /quota/collect` 可请求重新采集，不是手动解锁。
+
+明确的请求失败也会持久化阻断：Codex HTTP 429 且 `error.type` 为 `usage_limit_reached`，或 Antigravity HTTP 429 且 Google `ErrorInfo.reason` 为 `QUOTA_EXHAUSTED`。普通 429 仍只使用执行 cooldown。明确失败始终锁定 account 范围，不受 usage model 或 alias 影响。请求失败阻断（包括旧版 scoped 请求锁定）仅能由严格更新、成功、完整的权威主动探测解除：返回的全部 Provider 窗口必须 healthy/low，且包含可识别的基础额度窗口。混合探测只要含有 exhausted 窗口就不能解除这些锁定。生成响应头不能解除请求失败阻断。明确失败与 usage 在同一事务持久化；被动响应头额度写入仍为 best-effort。
+
+额度阻止选择时返回 `quota_exhausted`（HTTP 429），权威检查失败时返回 `quota_guard_unavailable`（HTTP 503）。不新增 Management 路由或响应字段。模型状态中的 `blocked`/`block_reason` 仍仅表示执行状态门控，不包含此独立保护；清理 cooldown 成功不代表凭证可调度。Plugin quota reset 后也需权威重新采集。
+
+保护状态跨重启、快照过期/替换及数据库导出恢复保留（数据库格式 v30），升级时回填已有 exhausted 窗口。实际凭证身份变更或删除会清除旧身份的保护，普通刷新不会。已分发或正在执行的请求无法撤回。CPA payload 不变，因此缺少执行时身份 token 时，首次延迟到达的反馈无法在凭证替换后完美归属。尚未到达 Home 的额度信息无法生效；缺少权威恢复数据的 Provider 可能保持阻断。
+
 ### POST `/routing/cooldown/reset`
 
 清除所选凭证在 Home 中的调度冷却，包括模型冷却。不会重置上游账号额度，也不会删除持久化额度快照。仅清理某个模型时，使用已有的 `DELETE /credentials/:credential_id/cooldown`。

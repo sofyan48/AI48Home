@@ -309,7 +309,7 @@ func (r *Runtime) SetClusterAdapter(adapter ClusterAdapter) {
 	r.refreshAccessProviders()
 	if r.coreManager != nil {
 		if adapter != nil && adapter.Enabled() {
-			r.coreManager.SetFullAuthResolver(adapter)
+			r.coreManager.SetFullAuthResolver(quotaCheckedResolver{ClusterAdapter: adapter})
 			if store, ok := adapter.(coreauth.Store); ok {
 				r.coreManager.SetStore(store)
 			}

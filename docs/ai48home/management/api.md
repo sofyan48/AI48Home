@@ -2869,6 +2869,18 @@ Home stores the resulting credential as DB-backed OAuth auth records and returns
 
 ## Credential Quota and Cooldown Operations
 
+### Durable quota dispatch guard
+
+Home independently enforces a database-backed quota guard before returning a dispatch credential. Quota exhaustion belongs to the Account Credential: **any exhausted window blocks all models on that credential**, regardless of provider, model, alias, prefix, window scope, or bucket. This applies to pinned selection, session affinity, retries, and fallback. Other healthy credentials may still be selected, subject to existing pin/session rules. Window and scope identities track authoritative recovery only; they never narrow the dispatch block.
+
+The guard is independent of execution cooldown. Neither `disable-cooling: true`, cooldown expiry, cooldown reset operations, a successful generation, nor stale/unknown/error quota data clears it. Reset timestamps are not proof of recovery. A strictly newer authoritative active quota probe must report the matching window/scope as healthy or low (including normalized unlimited windows). All blocking windows on the credential must recover. Unknown quota without previous exhaustion does not itself create a block. Blocked credentials remain eligible for scheduled quota probes without requiring new generation traffic; existing probe freshness, backoff, and disabled/refresh-blocked exclusions still apply. `POST /quota/collect` can request recollection; it is not a manual unblock.
+
+Explicit structured request failures also latch the guard: Codex HTTP 429 with `error.type: usage_limit_reached`, and Antigravity HTTP 429 with Google `ErrorInfo.reason: QUOTA_EXHAUSTED`. Generic HTTP 429 remains an execution cooldown, not proof of exhaustion. Explicit failures always latch the account domain, regardless of the usage model or alias. Request-failure guards, including legacy scoped request latches, require a strictly newer successful, complete authoritative active probe with all returned provider windows healthy/low, including a recognized base-domain window. A mixed probe with any exhausted window cannot clear those latches. Generation response headers cannot clear request-failure guards. Explicit failure ingestion is transactional with usage storage. Passive response-header quota ingestion remains best-effort.
+
+Dispatch returns `quota_exhausted` (HTTP 429) when exhaustion prevents selection, or `quota_guard_unavailable` (HTTP 503) when the authoritative check fails. No new Management route or response field is added. Existing model-state `blocked`/`block_reason` fields still describe execution-state gates, not this independent guard; a successful cooldown reset does **not** imply dispatch eligibility. Plugin quota resets likewise require authoritative recollection before this guard can clear.
+
+The guard survives restarts, snapshot expiry/replacement, and database export/restore (database format v30); existing exhausted quota windows are backfilled on upgrade. Actual credential identity changes or deletion remove the old identity's guards; ordinary refreshes do not. Already-dispatched/in-flight requests cannot be revoked. CPA payloads are unchanged, so first-arriving delayed feedback cannot be perfectly attributed across credential replacement without an execution-time identity token. Quota status that has not yet reached Home cannot be enforced, and providers without authoritative recovery data may remain blocked.
+
 ### POST `/routing/cooldown/reset`
 
 Clears Home's routing cooldown for the selected credential, including its model cooldowns. It does not reset upstream account quota or delete stored quota snapshots. For a single model, use the existing `DELETE /credentials/:credential_id/cooldown` route.

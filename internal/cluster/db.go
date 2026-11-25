@@ -295,6 +295,7 @@ func runCustomMigrations(db *gorm.DB) error {
 		name string
 		run  func(*gorm.DB) error
 	}{
+		{name: "migrate_quota_guards", run: migrateQuotaGuards},
 		{name: "migrate_organization_storage", run: migrateOrganizationStorage},
 		{name: "migrate_cpa_node_primary_key", run: migrateCPANodePrimaryKey},
 		{name: "migrate_billing_indexes", run: migrateBillingIndexes},
