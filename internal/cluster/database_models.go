@@ -24,7 +24,8 @@ import (
 // v28 separates organizations from users and reserves shared billing identities.
 // v29 adds organization.organization_channel_groups (NULL remains unrestricted).
 // v30 adds durable quota guards, including recovered observation watermarks.
-const currentDatabaseVersion = 30
+// v31 applies upstream v21's existing OpenAI-compatible provider key migration.
+const currentDatabaseVersion = 31
 
 // databaseModel describes one managed Home database table.
 type databaseModel struct {
@@ -942,7 +943,8 @@ func databaseSnapshotModels(formatVersion int) ([]databaseModel, bool) {
 		return databaseSnapshotV28Models, true
 	case 29:
 		return databaseSnapshotV29Models(), true
-	case currentDatabaseVersion:
+	case 30, currentDatabaseVersion:
+		// v31 namespaces provider keys without changing the v30 snapshot shape.
 		return homeDatabaseModels, true
 	default:
 		return nil, false
